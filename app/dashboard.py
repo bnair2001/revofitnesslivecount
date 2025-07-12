@@ -45,7 +45,7 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
         .join(Gym)
         .filter(Gym.state == state)
         .order_by(LiveCount.gym_id, LiveCount.ts.desc())
-        .distinct(LiveCount.gym_id)           # PostgreSQL “DISTINCT ON”
+        .distinct(LiveCount.gym_id)
         .subquery()
     )
 
@@ -152,7 +152,7 @@ def update_graph(state, _auto, _btn, toggle_vals, date, hour):
     # ───── prediction branch ─────
     if show_pred:
         when = dt.datetime.fromisoformat(date) + dt.timedelta(hours=hour)
-        pred_map = predict(state, when)          # {gym: int | None}
+        pred_map = predict(state, when)
         df = pd.Series(pred_map).reset_index()
         df.columns = ["Gym", "Count"]
 
