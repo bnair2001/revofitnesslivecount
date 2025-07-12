@@ -1,7 +1,8 @@
 import datetime as dt
+
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, State
+from dash import dcc, html, Input, Output, State, ctx
 import pandas as pd
 from sqlalchemy import select
 
@@ -12,22 +13,60 @@ from prediction import predict
 
 # spin up background job
 start_scheduler()
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.BOOTSTRAP],
+)
+app.title = "Revo Fitness Live Crowd"
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-app.title = "Revo Fitness - Live Crowd"
 
+# ────────────────── helpers ──────────────────
 def _state_options():
+    """Return dropdown options [{label,value}, …] from distinct Gym.state."""
     ses = Session()
-    states = sorted({row.state for row, in ses.query(Gym.state).distinct()})
+    states = [row[0] for row in ses.query(Gym.state).distinct().all() if row[0]]
     ses.close()
-    return [{"label": s, "value": s} for s in states]
+    return [{"label": s, "value": s} for s in sorted(states)]
 
 
+def _get_latest_counts(state: str) -> pd.DataFrame:
+    """
+    One row per gym (name, count, ts) the most recent LiveCount for that gym.
+    """
+    ses = Session()
+
+    sub = (
+        ses.query(
+            LiveCount.gym_id.label("gym_id"),
+            LiveCount.count.label("count"),
+            LiveCount.ts.label("ts"),
+            # rank() OVER (PARTITION BY gym_id ORDER BY ts DESC) AS r
+        )
+        .join(Gym)
+        .filter(Gym.state == state)
+        .order_by(LiveCount.gym_id, LiveCount.ts.desc())
+        .distinct(LiveCount.gym_id)           # PostgreSQL “DISTINCT ON”
+        .subquery()
+    )
+
+    q = (
+        select(Gym.name, sub.c.count, sub.c.ts)
+        .join_from(Gym, sub, Gym.id == sub.c.gym_id)
+        .order_by(Gym.name)
+    )
+
+    df = pd.read_sql(q, ses.bind, parse_dates=["ts"])
+    ses.close()
+    return df
+
+
+# ────────────────── layout ──────────────────
 app.layout = dbc.Container(
     [
-        html.H2("Revo Fitness - Live Member Counts"),
+        html.H2("Revo Fitness Live Member Counts"),
         dbc.Row(
             [
+                # State selector
                 dbc.Col(
                     [
                         dbc.Label("State"),
@@ -40,12 +79,13 @@ app.layout = dbc.Container(
                     ],
                     md=3,
                 ),
+                # Prediction controls
                 dbc.Col(
                     [
                         dbc.Checklist(
+                            id="pred-toggle",
                             options=[{"label": "Show prediction", "value": "pred"}],
                             value=[],
-                            id="pred-toggle",
                             switch=True,
                         ),
                         dcc.DatePickerSingle(
@@ -64,8 +104,14 @@ app.layout = dbc.Container(
                     ],
                     md=3,
                 ),
+                # Manual refresh
                 dbc.Col(
-                    dbc.Button("Refresh now", id="refresh-btn", n_clicks=0, color="primary"),
+                    dbc.Button(
+                        "Refresh now",
+                        id="refresh-btn",
+                        n_clicks=0,
+                        color="primary",
+                    ),
                     md="auto",
                 ),
             ],
@@ -78,30 +124,7 @@ app.layout = dbc.Container(
 )
 
 
-def _get_latest_counts(state: str):
-    ses = Session()
-    sub = (
-        ses.query(
-            LiveCount.gym_id,
-            LiveCount.count,
-            LiveCount.ts
-        )
-        .join(Gym)
-        .filter(Gym.state == state)
-        .order_by(LiveCount.gym_id, LiveCount.ts.desc())
-        .distinct(LiveCount.gym_id)
-        .subquery()
-    )
-    query = (
-        select(Gym.name, sub.c.count, sub.c.ts)
-        .join_from(Gym, sub, Gym.id == sub.c.gym_id)
-        .order_by(Gym.name)
-    )
-    df = pd.read_sql(query, ses.bind, parse_dates=["ts"])
-    ses.close()
-    return df
-
-
+# ────────────────── callbacks ──────────────────
 @app.callback(
     Output("crowd-graph", "figure"),
     Input("state-dropdown", "value"),
@@ -112,25 +135,43 @@ def _get_latest_counts(state: str):
     State("pred-hour", "value"),
     prevent_initial_call=False,
 )
-def update_graph(state, _auto, _n_clicks, toggle_vals, date, hour):
-    # manual scrape if Refresh button was hit
-    ctx = dash.callback_context
-    if ctx.triggered and ctx.triggered[0]["prop_id"].startswith("refresh-btn"):
+def update_graph(state, _auto, _btn, toggle_vals, date, hour):
+    """
+    Re-draw graph when:
+        • state changes
+        • auto-interval ticks (every 60 s)
+        • manual Refresh button clicked
+        • prediction toggle / date / hour changes
+    """
+    # Manual scrape if the *Refresh now* button triggered this callback
+    if ctx.triggered_id == "refresh-btn":
         scrape_once()
 
     show_pred = "pred" in toggle_vals
 
+    # ───── prediction branch ─────
     if show_pred:
         when = dt.datetime.fromisoformat(date) + dt.timedelta(hours=hour)
-        data = predict(state, when)
-        title = f"Predicted crowd @ {when:%A %H:00}"
-        df = pd.Series(data).reset_index()
+        pred_map = predict(state, when)          # {gym: int | None}
+        df = pd.Series(pred_map).reset_index()
         df.columns = ["Gym", "Count"]
+
+        title = f"Predicted crowd @ {when:%A %H:00}"
+
+    # ───── live counts branch ─────
     else:
         df = _get_latest_counts(state)
-        title = f"Latest live counts ({df.ts.max():%d-%b %H:%M})"
-        df = df[["name", "count"]].rename(columns={"name": "Gym", "count": "Count"})
 
+        # no data yet? → avoid NaT strftime crash
+        if df.empty or df["ts"].dropna().empty:
+            title = "Latest live counts (no data yet)"
+            df = pd.DataFrame({"Gym": [], "Count": []})
+        else:
+            ts_max = df["ts"].max()
+            title = f"Latest live counts ({ts_max:%d-%b %H:%M})"
+            df = df[["name", "count"]].rename(columns={"name": "Gym", "count": "Count"})
+
+    # ───── bar chart figure ─────
     fig = {
         "data": [
             {
