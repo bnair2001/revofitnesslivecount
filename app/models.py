@@ -1,5 +1,11 @@
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, func
+    Column,
+    Integer,
+    String,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
