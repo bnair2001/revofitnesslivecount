@@ -1,8 +1,8 @@
 """
 A lightweight forecaster:
 for each gym it stores the median crowd for every (weekday, hour)
-combination seen so far. Requests to `predict(state, when)`
-are answered by lookup; falls back to last observed value if unknown.
+combination seen so far.  If no median exists it falls back to
+the most recent observed value, then to 0.
 """
 import datetime as dt
 from collections import defaultdict
@@ -23,10 +23,11 @@ def _build_index():
     ses.close()
 
     if df.empty:
-        return {}
+        return {}, {}
 
     df["wkday"] = df.ts.dt.weekday
     df["hour"] = df.ts.dt.hour
+
     med = (
         df.groupby(["name", "wkday", "hour"])["count"]
         .median()
@@ -34,19 +35,23 @@ def _build_index():
         .reset_index()
     )
 
+    latest = df.sort_values("ts").groupby("name")["count"].last().to_dict()
+
     index = defaultdict(dict)
     for row in med.itertuples():
         index[row.name][(row.wkday, row.hour)] = int(row.median)
-    return index
+    return index, latest
 
 
 def predict(state: str, when: dt.datetime) -> dict[str, int]:
-    idx = _build_index()
+    index, last = _build_index()
     target = (when.weekday(), when.hour)
+
     ses = Session()
     gyms = ses.query(Gym).filter_by(state=state).all()
     ses.close()
+
     preds = {}
     for g in gyms:
-        preds[g.name] = idx.get(g.name, {}).get(target, None)
+        preds[g.name] = index.get(g.name, {}).get(target) or last.get(g.name) or 0
     return preds
