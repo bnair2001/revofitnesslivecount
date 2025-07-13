@@ -13,10 +13,7 @@ from prediction import predict
 
 # spin up background job
 start_scheduler()
-app = dash.Dash(
-    __name__,
-    external_stylesheets=[dbc.themes.BOOTSTRAP],
-)
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 
 
@@ -24,9 +21,9 @@ app.title = "Revo Fitness Live Crowd"
 def _state_options():
     """Return dropdown options [{label,value}, …] from distinct Gym.state."""
     ses = Session()
-    states = [row[0] for row in ses.query(Gym.state).distinct().all() if row[0]]
+    res = [r[0] for r in ses.query(Gym.state).distinct().all() if r[0]]
     ses.close()
-    return [{"label": s, "value": s} for s in sorted(states)]
+    return [{"label": s, "value": s} for s in sorted(res)]
 
 
 def _get_latest_counts(state: str) -> pd.DataFrame:
@@ -34,13 +31,11 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
     One row per gym (name, count, ts) the most recent LiveCount for that gym.
     """
     ses = Session()
-
     sub = (
         ses.query(
             LiveCount.gym_id.label("gym_id"),
             LiveCount.count.label("count"),
             LiveCount.ts.label("ts"),
-            # rank() OVER (PARTITION BY gym_id ORDER BY ts DESC) AS r
         )
         .join(Gym)
         .filter(Gym.state == state)
@@ -48,28 +43,37 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
         .distinct(LiveCount.gym_id)
         .subquery()
     )
-
     q = (
         select(Gym.name, sub.c.count, sub.c.ts)
         .join_from(Gym, sub, Gym.id == sub.c.gym_id)
         .order_by(Gym.name)
     )
-
     df = pd.read_sql(q, ses.bind, parse_dates=["ts"])
     ses.close()
     return df
 
 
-# ────────────────── layout ──────────────────
+def _colour(c: int) -> str:
+    return "success" if c < 40 else "warning" if c < 60 else "danger"
+
+
+def _localise(utc_dt: dt.datetime, offset_min: int | None) -> str:
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=dt.timezone.utc)
+    if offset_min is None:
+        return utc_dt.strftime("%d-%b %H:%M UTC")
+    return (utc_dt + dt.timedelta(minutes=offset_min)).strftime("%d-%b %H:%M")
+
+
+# ─── layout ───────────────────────────────────────────────────────────────
 app.layout = dbc.Container(
     [
-        html.H2("Revo Fitness Live Member Counts"),
+        html.H2("Revo Fitness Live Crowd", className="display-6 text-center mb-4"),
         dbc.Row(
             [
-                # State selector
                 dbc.Col(
                     [
-                        dbc.Label("State"),
+                        dbc.Label("State", className="fw-semibold"),
                         dcc.Dropdown(
                             id="state-dropdown",
                             options=_state_options(),
@@ -77,118 +81,158 @@ app.layout = dbc.Container(
                             clearable=False,
                         ),
                     ],
+                    xs=12,
+                    sm=6,
                     md=3,
                 ),
-                # Prediction controls
                 dbc.Col(
-                    [
-                        dbc.Checklist(
-                            id="pred-toggle",
-                            options=[{"label": "Show prediction", "value": "pred"}],
-                            value=[],
-                            switch=True,
-                        ),
-                        dcc.DatePickerSingle(
-                            id="pred-date",
-                            date=dt.datetime.now().date(),
-                        ),
-                        dcc.Input(
-                            id="pred-hour",
-                            type="number",
-                            min=0,
-                            max=23,
-                            step=1,
-                            value=dt.datetime.now().hour,
-                            style={"width": "4em"},
-                        ),
-                    ],
-                    md=3,
+                    dbc.Checklist(
+                        id="pred-toggle",
+                        options=[
+                            {"label": " Show 15-60 min prediction", "value": "pred"}
+                        ],
+                        value=[],
+                        switch=True,
+                    ),
+                    xs="auto",
+                    className="pt-3",
                 ),
-                # Manual refresh
                 dbc.Col(
                     dbc.Button(
-                        "Refresh now",
-                        id="refresh-btn",
-                        n_clicks=0,
-                        color="primary",
+                        "Refresh now", id="refresh-btn", n_clicks=0, color="primary"
                     ),
-                    md="auto",
+                    xs="auto",
+                    className="pt-3",
                 ),
             ],
-            className="my-2",
+            className="g-3 justify-content-center mb-4",
         ),
-        dcc.Graph(id="crowd-graph"),
+        html.Div(id="crowd-cards"),
+        dcc.Store(id="tz-offset", storage_type="memory"),
         dcc.Interval(id="auto-int", interval=60_000, n_intervals=0),
     ],
     fluid=True,
 )
 
+# ─── browser offset every minute ───────────────────────────────────────────
+app.clientside_callback(
+    "function(n){return -new Date().getTimezoneOffset();}",
+    Output("tz-offset", "data"),
+    Input("auto-int", "n_intervals"),
+)
 
-# ────────────────── callbacks ──────────────────
+
 @app.callback(
-    Output("crowd-graph", "figure"),
+    Output("crowd-cards", "children"),
     Input("state-dropdown", "value"),
     Input("auto-int", "n_intervals"),
     Input("refresh-btn", "n_clicks"),
     Input("pred-toggle", "value"),
-    State("pred-date", "date"),
-    State("pred-hour", "value"),
+    Input("tz-offset", "data"),
     prevent_initial_call=False,
 )
-def update_graph(state, _auto, _btn, toggle_vals, date, hour):
-    """
-    Re-draw graph when:
-        • state changes
-        • auto-interval ticks (every 60 s)
-        • manual Refresh button clicked
-        • prediction toggle / date / hour changes
-    """
-    # Manual scrape if the *Refresh now* button triggered this callback
+def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
     if ctx.triggered_id == "refresh-btn":
         scrape_once()
 
+    offset = int(tz_offset or 0)
     show_pred = "pred" in toggle_vals
 
-    # ───── prediction branch ─────
+    # ── prediction ────────────────────────────────────────────────────────
     if show_pred:
-        when = dt.datetime.fromisoformat(date) + dt.timedelta(hours=hour)
-        pred_map = predict(state, when)
-        df = pd.Series(pred_map).reset_index()
-        df.columns = ["Gym", "Count"]
-
-        title = f"Predicted crowd @ {when:%A %H:00}"
-
-    # ───── live counts branch ─────
+        base_utc = dt.datetime.utcnow().replace(
+            minute=0, second=0, microsecond=0, tzinfo=dt.timezone.utc
+        )
+        horizons = [15, 30, 45, 60]
+        frames = [
+            pd.Series(predict(state, base_utc + dt.timedelta(minutes=h)), name=f"+{h}")
+            for h in horizons
+        ]
+        df = pd.concat(frames, axis=1).reset_index()
+        df.rename(columns={"index": "Gym"}, inplace=True)
+        ts_label = f"Predicted from {_localise(base_utc, offset)}"
+        colour_col = df.columns[1]
     else:
-        df = _get_latest_counts(state)
+        live = _get_latest_counts(state)
+        if live.empty or live["ts"].dropna().empty:
+            return html.Div("No data yet.", className="text-center fs-4 text-muted")
+        df = (
+            live[["name", "count"]]
+            .rename(columns={"name": "Gym", "count": "Now"})
+            .set_index("Gym")
+        )
+        df["Now"] = df["Now"].astype(int)
+        df.reset_index(inplace=True)
+        ts_label = f"Updated {_localise(live['ts'].max(), offset)}"
+        colour_col = "Now"
 
-        # no data yet? → avoid NaT strftime crash
-        if df.empty or df["ts"].dropna().empty:
-            title = "Latest live counts (no data yet)"
-            df = pd.DataFrame({"Gym": [], "Count": []})
-        else:
-            ts_max = df["ts"].max()
-            title = f"Latest live counts ({ts_max:%d-%b %H:%M})"
-            df = df[["name", "count"]].rename(columns={"name": "Gym", "count": "Count"})
+    # ── build cards ───────────────────────────────────────────────────────
+    cards = []
+    for _, row in df.iterrows():
+        rows = [
+            html.Tr(
+                [html.Td(col), html.Td(int(row[col]), className="fs-2 fw-bold")],
+            )
+            for col in df.columns[1:]
+        ]
+        cards.append(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(row["Gym"], className="text-center fw-semibold"),
+                        dbc.CardBody(
+                            [
+                                html.Table(
+                                    rows,
+                                    className="table table-borderless mb-3 text-center",
+                                ),
+                                html.Small(ts_label, className="text-muted"),
+                            ],
+                            className="p-3",
+                        ),
+                    ],
+                    color=_colour(int(row[colour_col])),
+                    outline=True,
+                    className="shadow h-100 border-3",
+                    style={"borderColor": "var(--bs-card-bg)"},
+                ),
+                xs=12,
+                sm=6,
+                md=4,
+                lg=3,
+            )
+        )
 
-    # ───── bar chart figure ─────
-    fig = {
-        "data": [
-            {
-                "x": df["Gym"],
-                "y": df["Count"],
-                "type": "bar",
-            }
-        ],
-        "layout": {
-            "title": title,
-            "xaxis": {"tickangle": -45},
-            "yaxis": {"title": "Members in gym"},
-            "margin": {"b": 200},
-        },
-    }
-    return fig
+    return dbc.Row(cards, className="gy-4")
 
 
+# ─── bare-bones index (adds subtle bg gradient) ───────────────────────────
 if __name__ == "__main__":
+    app.index_string = """
+<!DOCTYPE html>
+<html>
+<head>
+    {%metas%}
+    <title>{%title%}</title>
+    {%favicon%}
+    {%css%}
+    <style>
+        body{
+            font-family:system-ui,Roboto,sans-serif;
+            background:linear-gradient(160deg,#f8f9fa 0%,#e9ecef 100%);
+        }
+        .card-header{background:rgba(0,0,0,.03)}
+        .table td{padding:.25rem .5rem}
+    </style>
+</head>
+<body>
+    {%app_entry%}
+    <footer>
+        {%config%}
+        {%scripts%}
+        {%renderer%}
+    </footer>
+</body>
+</html>
+"""
     app.run(host="0.0.0.0", port=8050, debug=False)
