@@ -13,10 +13,7 @@ from prediction import predict
 
 # spin up background job
 start_scheduler()
-app = dash.Dash(
-    __name__,
-    external_stylesheets=[dbc.themes.BOOTSTRAP],
-)
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 
 
@@ -40,7 +37,6 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
             LiveCount.gym_id.label("gym_id"),
             LiveCount.count.label("count"),
             LiveCount.ts.label("ts"),
-            # rank() OVER (PARTITION BY gym_id ORDER BY ts DESC) AS r
         )
         .join(Gym)
         .filter(Gym.state == state)
@@ -60,7 +56,26 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
     return df
 
 
-# ────────────────── layout ──────────────────
+def _colour(count: int) -> str:
+    if count < 40:
+        return "success"
+    if count < 60:
+        return "warning"
+    return "danger"
+
+
+def _localise(utc_dt: dt.datetime, offset_min):
+    # ensure the incoming value is timezone-aware UTC
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=dt.timezone.utc)
+
+    if offset_min is None:
+        return utc_dt.strftime("%d-%b %H:%M UTC")
+
+    local_dt = utc_dt + dt.timedelta(minutes=offset_min)
+    return local_dt.strftime("%d-%b %H:%M")
+
+
 app.layout = dbc.Container(
     [
         html.H2("Revo Fitness Live Member Counts"),
@@ -104,7 +119,6 @@ app.layout = dbc.Container(
                     ],
                     md=3,
                 ),
-                # Manual refresh
                 dbc.Col(
                     dbc.Button(
                         "Refresh now",
@@ -118,13 +132,19 @@ app.layout = dbc.Container(
             className="my-2",
         ),
         html.Div(id="crowd-cards"),
+        dcc.Store(id="tz-offset", storage_type="memory"),
         dcc.Interval(id="auto-int", interval=60_000, n_intervals=0),
     ],
     fluid=True,
 )
 
+app.clientside_callback(
+    "function(n){return -new Date().getTimezoneOffset();}",
+    Output("tz-offset", "data"),
+    Input("auto-int", "n_intervals"),
+)
 
-# ────────────────── callbacks ──────────────────
+
 @app.callback(
     Output("crowd-cards", "children"),
     Input("state-dropdown", "value"),
@@ -133,46 +153,68 @@ app.layout = dbc.Container(
     Input("pred-toggle", "value"),
     State("pred-date", "date"),
     State("pred-hour", "value"),
+    State("tz-offset", "data"),
     prevent_initial_call=False,
 )
-def update_cards(state, _auto, _btn, toggle_vals, date, hour):
+def update_cards(state, _auto, _btn, toggle_vals, date, hour, tz_offset):
     if ctx.triggered_id == "refresh-btn":
         scrape_once()
 
     show_pred = "pred" in toggle_vals
+    offset = tz_offset or 0
 
     if show_pred:
-        when = dt.datetime.fromisoformat(date) + dt.timedelta(hours=hour)
-        pred_map = predict(state, when)
-        df = pd.Series(pred_map).reset_index()
-        df.columns = ["Gym", "Count"]
-        ts_label = f"Predicted @ {when:%A %H:00}"
+        base_local = dt.datetime.fromisoformat(date).replace(hour=hour, minute=0, second=0, microsecond=0)
+        base_utc = base_local - dt.timedelta(minutes=offset)
+        base_utc = base_utc.replace(tzinfo=dt.timezone.utc)    # make it timezone-aware
+        horizons = [15, 30, 45, 60]
+        frames = []
+        for h in horizons:
+            when = base_utc + dt.timedelta(minutes=h)
+            frames.append(pd.Series(predict(state, when), name=f"+{h}"))
+        df = pd.concat(frames, axis=1).reset_index()
+        df.rename(columns={"index": "Gym"}, inplace=True)
+        ts_label = f"Predicted from {_localise(base_utc, offset)}"
+        colour_col = df.columns[1]
     else:
-        df = _get_latest_counts(state)
-        if df.empty or df["ts"].dropna().empty:
+        df_live = _get_latest_counts(state)
+        if df_live.empty or df_live["ts"].dropna().empty:
             return html.Div("No data available.")
-        df = df[["name", "count", "ts"]].rename(
-            columns={"name": "Gym", "count": "Count"}
+        df = (
+            df_live[["name", "count"]]
+            .rename(columns={"name": "Gym", "count": "Now"})
+            .set_index("Gym")
         )
-        ts = df["ts"].max()
-        ts_label = f"Updated @ {ts:%d-%b %H:%M}"
+        df["Now"] = df["Now"].astype(int)
+        df.reset_index(inplace=True)
+        ts_label = f"Updated {_localise(df_live['ts'].max(), offset)}"
+        colour_col = "Now"
 
-    # Build card grid
     cards = []
     for _, row in df.iterrows():
+        rows = [
+            html.Tr([html.Td(col), html.Td(int(row[col]))]) for col in df.columns[1:]
+        ]
         cards.append(
             dbc.Col(
                 dbc.Card(
                     [
-                        dbc.CardHeader(row["Gym"]),
+                        dbc.CardHeader(row["Gym"], className="text-center fw-bold"),
                         dbc.CardBody(
                             [
-                                html.H4(f"{int(row['Count'])}", className="card-title"),
-                                html.P(ts_label, className="card-text text-muted"),
+                                html.Table(
+                                    rows,
+                                    className="table table-sm mb-2 text-center",
+                                ),
+                                html.Small(
+                                    ts_label, className="text-muted d-block text-center"
+                                ),
                             ]
                         ),
                     ],
-                    className="mb-3 shadow-sm",
+                    color=_colour(int(row[colour_col])),
+                    outline=True,
+                    className="shadow-sm mb-3",
                 ),
                 xs=12,
                 sm=6,
@@ -188,34 +230,20 @@ if __name__ == "__main__":
     app.index_string = """
 <!DOCTYPE html>
 <html>
-    <head>
-        {%metas%}
-        <title>{%title%}</title>
-        {%favicon%}
-        {%css%}
-        <style>
-            .card-title {
-                font-size: 2em;
-                text-align: center;
-            }
-            .card-header {
-                font-weight: bold;
-                text-align: center;
-            }
-            .card-text {
-                font-size: 0.9em;
-                text-align: center;
-            }
-        </style>
-    </head>
-    <body>
-        {%app_entry%}
-        <footer>
-            {%config%}
-            {%scripts%}
-            {%renderer%}
-        </footer>
-    </body>
-</html>
-"""
+<head>
+    {%metas%}
+    <title>{%title%}</title>
+    {%favicon%}
+    {%css%}
+    <style>.card-header{text-align:center;font-weight:bold}.table td{text-align:center}</style>
+</head>
+<body>
+    {%app_entry%}
+    <footer>
+        {%config%}
+        {%scripts%}
+        {%renderer%}
+    </footer>
+</body>
+</html>"""
     app.run(host="0.0.0.0", port=8050, debug=False)
