@@ -117,7 +117,7 @@ app.layout = dbc.Container(
             ],
             className="my-2",
         ),
-        dcc.Graph(id="crowd-graph"),
+        html.Div(id="crowd-cards"),
         dcc.Interval(id="auto-int", interval=60_000, n_intervals=0),
     ],
     fluid=True,
@@ -126,7 +126,7 @@ app.layout = dbc.Container(
 
 # ────────────────── callbacks ──────────────────
 @app.callback(
-    Output("crowd-graph", "figure"),
+    Output("crowd-cards", "children"),
     Input("state-dropdown", "value"),
     Input("auto-int", "n_intervals"),
     Input("refresh-btn", "n_clicks"),
@@ -135,60 +135,87 @@ app.layout = dbc.Container(
     State("pred-hour", "value"),
     prevent_initial_call=False,
 )
-def update_graph(state, _auto, _btn, toggle_vals, date, hour):
-    """
-    Re-draw graph when:
-        • state changes
-        • auto-interval ticks (every 60 s)
-        • manual Refresh button clicked
-        • prediction toggle / date / hour changes
-    """
-    # Manual scrape if the *Refresh now* button triggered this callback
+def update_cards(state, _auto, _btn, toggle_vals, date, hour):
     if ctx.triggered_id == "refresh-btn":
         scrape_once()
 
     show_pred = "pred" in toggle_vals
 
-    # ───── prediction branch ─────
     if show_pred:
         when = dt.datetime.fromisoformat(date) + dt.timedelta(hours=hour)
         pred_map = predict(state, when)
         df = pd.Series(pred_map).reset_index()
         df.columns = ["Gym", "Count"]
-
-        title = f"Predicted crowd @ {when:%A %H:00}"
-
-    # ───── live counts branch ─────
+        ts_label = f"Predicted @ {when:%A %H:00}"
     else:
         df = _get_latest_counts(state)
-
-        # no data yet? → avoid NaT strftime crash
         if df.empty or df["ts"].dropna().empty:
-            title = "Latest live counts (no data yet)"
-            df = pd.DataFrame({"Gym": [], "Count": []})
-        else:
-            ts_max = df["ts"].max()
-            title = f"Latest live counts ({ts_max:%d-%b %H:%M})"
-            df = df[["name", "count"]].rename(columns={"name": "Gym", "count": "Count"})
+            return html.Div("No data available.")
+        df = df[["name", "count", "ts"]].rename(
+            columns={"name": "Gym", "count": "Count"}
+        )
+        ts = df["ts"].max()
+        ts_label = f"Updated @ {ts:%d-%b %H:%M}"
 
-    # ───── bar chart figure ─────
-    fig = {
-        "data": [
-            {
-                "x": df["Gym"],
-                "y": df["Count"],
-                "type": "bar",
-            }
-        ],
-        "layout": {
-            "title": title,
-            "xaxis": {"tickangle": -45},
-            "yaxis": {"title": "Members in gym"},
-            "margin": {"b": 200},
-        },
-    }
-    return fig
+    # Build card grid
+    cards = []
+    for _, row in df.iterrows():
+        cards.append(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(row["Gym"]),
+                        dbc.CardBody(
+                            [
+                                html.H4(f"{int(row['Count'])}", className="card-title"),
+                                html.P(ts_label, className="card-text text-muted"),
+                            ]
+                        ),
+                    ],
+                    className="mb-3 shadow-sm",
+                ),
+                xs=12,
+                sm=6,
+                md=4,
+                lg=3,
+            )
+        )
+
+    return dbc.Row(cards, className="gy-3")
 
 
 if __name__ == "__main__":
+    app.index_string = """
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            .card-title {
+                font-size: 2em;
+                text-align: center;
+            }
+            .card-header {
+                font-weight: bold;
+                text-align: center;
+            }
+            .card-text {
+                font-size: 0.9em;
+                text-align: center;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+"""
     app.run(host="0.0.0.0", port=8050, debug=False)
