@@ -14,7 +14,7 @@ Dash 3.1.1 and dash-bootstrap-components 2.0.3.
 
 ```bash
 git clone <repo>
-cd revo-live-dashboard
+cd revofitnesslivecount
 docker compose up --build
 ```
 Browse to http://localhost:8050
