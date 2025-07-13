@@ -145,7 +145,9 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         )
         horizons = [15, 30, 45, 60]
         frames = [
-            pd.Series(predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins")
+            pd.Series(
+                predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins"
+            )
             for h in horizons
         ]
         df = pd.concat(frames, axis=1).reset_index()
