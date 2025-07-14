@@ -25,30 +25,23 @@ def _state_options():
     ses.close()
     return [{"label": s, "value": s} for s in sorted(res)]
 
-
 def _get_latest_counts(state: str) -> pd.DataFrame:
     """
-    One row per gym (name, count, ts) the most recent LiveCount for that gym.
+    Returns latest LiveCount per gym using PostgreSQL DISTINCT ON
     """
     ses = Session()
-    sub = (
-        ses.query(
-            LiveCount.gym_id.label("gym_id"),
-            LiveCount.count.label("count"),
-            LiveCount.ts.label("ts"),
-        )
-        .join(Gym)
-        .filter(Gym.state == state)
-        .order_by(LiveCount.gym_id, LiveCount.ts.desc())
-        .distinct(LiveCount.gym_id)
-        .subquery()
-    )
-    q = (
-        select(Gym.name, sub.c.count, sub.c.ts)
-        .join_from(Gym, sub, Gym.id == sub.c.gym_id)
-        .order_by(Gym.name)
-    )
-    df = pd.read_sql(q, ses.bind, parse_dates=["ts"])
+    query = """
+        SELECT g.name, lc.count, lc.ts
+        FROM gyms g
+        JOIN (
+            SELECT DISTINCT ON (gym_id) *
+            FROM live_counts
+            ORDER BY gym_id, ts DESC
+        ) lc ON g.id = lc.gym_id
+        WHERE g.state = %s
+        ORDER BY g.name;
+    """
+    df = pd.read_sql(query, ses.bind, params=(state,), parse_dates=["ts"])
     ses.close()
     return df
 
