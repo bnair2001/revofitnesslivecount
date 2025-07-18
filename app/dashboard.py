@@ -2,9 +2,9 @@ import datetime as dt
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, State, ctx
+from dash import dcc, html, Input, Output, ctx
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, and_, desc
 
 from models import Gym, LiveCount
 from db import Session
@@ -25,23 +25,33 @@ def _state_options():
     ses.close()
     return [{"label": s, "value": s} for s in sorted(res)]
 
+
 def _get_latest_counts(state: str) -> pd.DataFrame:
     """
     Returns latest LiveCount per gym using PostgreSQL DISTINCT ON
     """
     ses = Session()
-    query = """
-        SELECT g.name, lc.count, lc.ts
-        FROM gyms g
-        JOIN (
-            SELECT DISTINCT ON (gym_id) *
-            FROM live_counts
-            ORDER BY gym_id, ts DESC
-        ) lc ON g.id = lc.gym_id
-        WHERE g.state = %s
-        ORDER BY g.name;
-    """
-    df = pd.read_sql(query, ses.bind, params=(state,), parse_dates=["ts"])
+
+    subq = (
+        ses.query(
+            LiveCount.id,
+            LiveCount.gym_id,
+            LiveCount.count,
+            LiveCount.ts,
+            func.row_number().over(
+                partition_by=LiveCount.gym_id,
+                order_by=desc(LiveCount.ts)
+            ).label("rn")
+        ).subquery()
+    )
+    # Join Gym with latest LiveCount per gym
+    q = (
+        ses.query(Gym.name, subq.c.count, subq.c.ts)
+        .join(subq, Gym.id == subq.c.gym_id)
+        .filter(and_(subq.c.rn == 1, Gym.state == state))
+        .order_by(Gym.name)
+    )
+    df = pd.DataFrame(q.all(), columns=["name", "count", "ts"])
     ses.close()
     return df
 
