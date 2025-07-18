@@ -11,8 +11,8 @@ from db import Session
 from fetcher import start_scheduler, scrape_once
 from prediction import predict
 
-# spin up background job
-start_scheduler()
+scrape_once()  # Initial scrape to populate DB
+start_scheduler() # spin up background job
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 

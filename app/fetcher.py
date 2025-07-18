@@ -57,6 +57,9 @@ def scrape_once():
       • insert any new gyms
       • write one row per gym to live_counts
     """
+    # Ensure tables exist before scraping
+    Base.metadata.create_all(engine)
+
     soup = _fetch_soup()
     select = soup.select_one("#gymSelect")
     if not select:
