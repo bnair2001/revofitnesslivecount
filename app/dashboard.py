@@ -2,17 +2,17 @@ import datetime as dt
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, State, ctx
+from dash import dcc, html, Input, Output, ctx
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, and_, desc
 
 from models import Gym, LiveCount
 from db import Session
 from fetcher import start_scheduler, scrape_once
 from prediction import predict
 
-# spin up background job
-start_scheduler()
+scrape_once()  # Initial scrape to populate DB
+start_scheduler() # spin up background job
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 
@@ -28,27 +28,30 @@ def _state_options():
 
 def _get_latest_counts(state: str) -> pd.DataFrame:
     """
-    One row per gym (name, count, ts) the most recent LiveCount for that gym.
+    Returns latest LiveCount per gym using PostgreSQL DISTINCT ON
     """
     ses = Session()
-    sub = (
+
+    subq = (
         ses.query(
-            LiveCount.gym_id.label("gym_id"),
-            LiveCount.count.label("count"),
-            LiveCount.ts.label("ts"),
-        )
-        .join(Gym)
-        .filter(Gym.state == state)
-        .order_by(LiveCount.gym_id, LiveCount.ts.desc())
-        .distinct(LiveCount.gym_id)
-        .subquery()
+            LiveCount.id,
+            LiveCount.gym_id,
+            LiveCount.count,
+            LiveCount.ts,
+            func.row_number().over(
+                partition_by=LiveCount.gym_id,
+                order_by=desc(LiveCount.ts)
+            ).label("rn")
+        ).subquery()
     )
+    # Join Gym with latest LiveCount per gym
     q = (
-        select(Gym.name, sub.c.count, sub.c.ts)
-        .join_from(Gym, sub, Gym.id == sub.c.gym_id)
+        ses.query(Gym.name, subq.c.count, subq.c.ts)
+        .join(subq, Gym.id == subq.c.gym_id)
+        .filter(and_(subq.c.rn == 1, Gym.state == state))
         .order_by(Gym.name)
     )
-    df = pd.read_sql(q, ses.bind, parse_dates=["ts"])
+    df = pd.DataFrame(q.all(), columns=["name", "count", "ts"])
     ses.close()
     return df
 
