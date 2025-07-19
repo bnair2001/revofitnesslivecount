@@ -12,7 +12,7 @@ from fetcher import start_scheduler, scrape_once
 from prediction import predict
 
 scrape_once()  # Initial scrape to populate DB
-start_scheduler() # spin up background job
+start_scheduler()  # spin up background job
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 
@@ -32,18 +32,15 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
     """
     ses = Session()
 
-    subq = (
-        ses.query(
-            LiveCount.id,
-            LiveCount.gym_id,
-            LiveCount.count,
-            LiveCount.ts,
-            func.row_number().over(
-                partition_by=LiveCount.gym_id,
-                order_by=desc(LiveCount.ts)
-            ).label("rn")
-        ).subquery()
-    )
+    subq = ses.query(
+        LiveCount.id,
+        LiveCount.gym_id,
+        LiveCount.count,
+        LiveCount.ts,
+        func.row_number()
+        .over(partition_by=LiveCount.gym_id, order_by=desc(LiveCount.ts))
+        .label("rn"),
+    ).subquery()
     # Join Gym with latest LiveCount per gym
     q = (
         ses.query(Gym.name, subq.c.count, subq.c.ts)
@@ -148,7 +145,9 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         )
         horizons = [15, 30, 45, 60]
         frames = [
-            pd.Series(predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins")
+            pd.Series(
+                predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins"
+            )
             for h in horizons
         ]
         df = pd.concat(frames, axis=1).reset_index()

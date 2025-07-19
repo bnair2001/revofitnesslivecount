@@ -17,6 +17,8 @@ class Gym(Base):
     id = Column(Integer, primary_key=True)
     state = Column(String(8), index=True)
     name = Column(String(64), unique=True, index=True)
+    address = Column(String, nullable=True)
+    size_sqm = Column(Integer, nullable=True)
 
     counts = relationship("LiveCount", back_populates="gym")
 
