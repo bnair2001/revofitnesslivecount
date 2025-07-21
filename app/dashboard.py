@@ -12,7 +12,7 @@ from fetcher import start_scheduler, scrape_once
 from prediction import predict
 
 scrape_once()  # Initial scrape to populate DB
-start_scheduler() # spin up background job
+start_scheduler()  # spin up background job
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 
@@ -32,32 +32,45 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
     """
     ses = Session()
 
-    subq = (
-        ses.query(
-            LiveCount.id,
-            LiveCount.gym_id,
-            LiveCount.count,
-            LiveCount.ts,
-            func.row_number().over(
-                partition_by=LiveCount.gym_id,
-                order_by=desc(LiveCount.ts)
-            ).label("rn")
-        ).subquery()
-    )
+    subq = ses.query(
+        LiveCount.id,
+        LiveCount.gym_id,
+        LiveCount.count,
+        LiveCount.ts,
+        func.row_number()
+        .over(partition_by=LiveCount.gym_id, order_by=desc(LiveCount.ts))
+        .label("rn"),
+    ).subquery()
     # Join Gym with latest LiveCount per gym
     q = (
-        ses.query(Gym.name, subq.c.count, subq.c.ts)
+        ses.query(Gym.name, subq.c.count, subq.c.ts, Gym.size_sqm)
         .join(subq, Gym.id == subq.c.gym_id)
         .filter(and_(subq.c.rn == 1, Gym.state == state))
         .order_by(Gym.name)
     )
-    df = pd.DataFrame(q.all(), columns=["name", "count", "ts"])
+    df = pd.DataFrame(q.all(), columns=["name", "count", "ts", "size_sqm"])
     ses.close()
     return df
 
 
-def _colour(c: int) -> str:
-    return "success" if c < 40 else "warning" if c < 60 else "danger"
+def _colour(crowd: int, area: int | None) -> str:
+    """
+    Returns a color based on crowd percentage using area and count.
+    10 sqm per person is ideal. If area is missing, fallback to old logic.
+    """
+    if area and area > 0:
+        ideal_capacity = area // 10
+        if ideal_capacity == 0:
+            ideal_capacity = 1
+        percent = crowd / ideal_capacity
+        if percent < 0.5:
+            return "success"
+        elif percent < 0.8:
+            return "warning"
+        else:
+            return "danger"
+    # fallback if area is not available
+    return "success" if crowd < 40 else "warning" if crowd < 60 else "danger"
 
 
 def _localise(utc_dt: dt.datetime, offset_min: int | None) -> str:
@@ -148,7 +161,9 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         )
         horizons = [15, 30, 45, 60]
         frames = [
-            pd.Series(predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins")
+            pd.Series(
+                predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins"
+            )
             for h in horizons
         ]
         df = pd.concat(frames, axis=1).reset_index()
@@ -160,8 +175,8 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         if live.empty or live["ts"].dropna().empty:
             return html.Div("No data yet.", className="text-center fs-4 text-muted")
         df = (
-            live[["name", "count"]]
-            .rename(columns={"name": "Gym", "count": "Now"})
+            live[["name", "count", "size_sqm"]]
+            .rename(columns={"name": "Gym", "count": "Now", "size_sqm": "Area (sqm)"})
             .set_index("Gym")
         )
         df["Now"] = df["Now"].astype(int)
@@ -172,32 +187,133 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
     # ── build cards ───────────────────────────────────────────────────────
     cards = []
     for _, row in df.iterrows():
-        rows = [
-            html.Tr(
-                [html.Td(col), html.Td(int(row[col]), className="fs-2 fw-bold")],
-            )
-            for col in df.columns[1:]
-        ]
+        area = row.get("Area (sqm)", None)
+        crowd = int(row[colour_col])
+        percent = 0
+        if area and area > 0:
+            ideal_capacity = area // 7 if area // 7 > 0 else 1
+            percent = min(1.0, crowd / ideal_capacity)
+        rows = []
+        for col in df.columns[1:]:
+            if col == "Area (sqm)":
+                rows.append(
+                    html.Tr(
+                        [
+                            html.Td("Area (sqm)"),
+                            html.Td(
+                                f"{row[col]:,}" if row[col] else "-",
+                                className="fs-5 fw-normal",
+                            ),
+                        ]
+                    )
+                )
+            else:
+                rows.append(
+                    html.Tr(
+                        [html.Td(col), html.Td(int(row[col]), className="fs-2 fw-bold")]
+                    )
+                )
+        # Water animation wraps the card
+        water_id = f"water-{row['Gym'].replace(' ', '-')}-card"
+        # Choose card background color based on crowd percentage
+        crowd_color = _colour(crowd, area)
+        bg_map = {
+            "success": "linear-gradient(160deg,#e3fce3 0%,#b2f5ea 100%)",
+            "warning": "linear-gradient(160deg,#fffde4 0%,#ffe0b2 100%)",
+            "danger": "linear-gradient(160deg,#ffe3e3 0%,#ffb2b2 100%)",
+        }
+        card_bg = bg_map.get(crowd_color, "#e3f2fd")
         cards.append(
             dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader(row["Gym"], className="text-center fw-semibold"),
-                        dbc.CardBody(
-                            [
+                html.Div(
+                    id=water_id,
+                    style={
+                        "position": "relative",
+                        "height": "320px",
+                        "width": "100%",
+                        "background": card_bg,
+                        "borderRadius": "18px",
+                        "overflow": "hidden",
+                        "boxShadow": "0 4px 24px 0 rgba(60,60,60,0.08), 0 1.5px 6px 0 rgba(60,60,60,0.04)",
+                    },
+                    children=[
+                        # Water fill
+                        html.Div(
+                            style={
+                                "position": "absolute",
+                                "bottom": 0,
+                                "left": 0,
+                                "width": "100%",
+                                "height": f"{int(percent*100)}%",
+                                "background": "linear-gradient(180deg,#42a5f5 0%,#90caf9 100%)",
+                                "transition": "height 0.8s cubic-bezier(.4,0,.2,1)",
+                                "borderBottomLeftRadius": "18px",
+                                "borderBottomRightRadius": "18px",
+                                "zIndex": 1,
+                                "opacity": 0.85,
+                            },
+                        ),
+                        # Card content
+                        html.Div(
+                            style={
+                                "position": "absolute",
+                                "top": 0,
+                                "left": 0,
+                                "width": "100%",
+                                "height": "100%",
+                                "zIndex": 2,
+                                "pointerEvents": "none",
+                                "display": "flex",
+                                "flexDirection": "column",
+                                "justifyContent": "space-between",
+                            },
+                            children=[
+                                # Header and badge
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            row["Gym"],
+                                            style={
+                                                "fontWeight": "600",
+                                                "fontSize": "1.35em",
+                                                "textAlign": "center",
+                                                "marginTop": "10px",
+                                            },
+                                        ),
+                                        html.Span(
+                                            f"{int(percent*100)}% full",
+                                            style={
+                                                "position": "absolute",
+                                                "right": 18,
+                                                "top": 18,
+                                                "background": "#1565c0",
+                                                "color": "#fff",
+                                                "borderRadius": "12px",
+                                                "padding": "2px 12px",
+                                                "fontWeight": "bold",
+                                                "fontSize": "1em",
+                                                "boxShadow": "0 2px 8px #90caf9",
+                                                "zIndex": 3,
+                                            },
+                                        ),
+                                    ],
+                                    style={"position": "relative"},
+                                ),
+                                # Stats table
                                 html.Table(
                                     rows,
                                     className="table table-borderless mb-3 text-center",
+                                    style={"marginTop": "8px", "marginBottom": "0"},
                                 ),
-                                html.Small(ts_label, className="text-muted"),
+                                # Timestamp
+                                html.Small(
+                                    ts_label,
+                                    className="text-muted",
+                                    style={"marginBottom": "10px", "marginLeft": "8px"},
+                                ),
                             ],
-                            className="p-3",
                         ),
                     ],
-                    color=_colour(int(row[colour_col])),
-                    outline=True,
-                    className="shadow h-100 border-3",
-                    style={"borderColor": "var(--bs-card-bg)"},
                 ),
                 xs=12,
                 sm=6,
@@ -235,6 +351,42 @@ if __name__ == "__main__":
         {%scripts%}
         {%renderer%}
     </footer>
+    <script>
+    // Gyroscope water animation for all water-* elements
+    function animateWaterGyro() {
+        const waterDivs = document.querySelectorAll('[id^="water-"]');
+        let tiltX = 0, tiltY = 0;
+        let hasGyro = false;
+        function updateWater() {
+            waterDivs.forEach(div => {
+                const fill = div.querySelector('div');
+                if (fill) {
+                    // Tilt the water fill using rotateZ
+                    fill.style.transform = `skewX(${tiltY/6}deg) skewY(${tiltX/8}deg)`;
+                }
+            });
+        }
+        if (window.DeviceOrientationEvent) {
+            window.addEventListener('deviceorientation', function(e) {
+                hasGyro = true;
+                tiltX = e.beta || 0;
+                tiltY = e.gamma || 0;
+                updateWater();
+            });
+        }
+        // Fallback: gentle wave animation if no gyroscope
+        if (!hasGyro) {
+            let t = 0;
+            setInterval(() => {
+                t += 0.05;
+                tiltX = Math.sin(t) * 6;
+                tiltY = Math.cos(t) * 4;
+                updateWater();
+            }, 60);
+        }
+    }
+    document.addEventListener('DOMContentLoaded', animateWaterGyro);
+    </script>
 </body>
 </html>
 """

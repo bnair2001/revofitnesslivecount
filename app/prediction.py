@@ -4,6 +4,7 @@ for each gym it stores the median crowd for every (weekday, hour)
 combination seen so far.  If no median exists it falls back to
 the most recent observed value, then to 0.
 """
+
 import datetime as dt
 from collections import defaultdict
 
