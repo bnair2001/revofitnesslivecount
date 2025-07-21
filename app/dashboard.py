@@ -56,10 +56,10 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
 def _colour(crowd: int, area: int | None) -> str:
     """
     Returns a color based on crowd percentage using area and count.
-    7 sqm per person is ideal. If area is missing, fallback to old logic.
+    10 sqm per person is ideal. If area is missing, fallback to old logic.
     """
     if area and area > 0:
-        ideal_capacity = area // 7
+        ideal_capacity = area // 10
         if ideal_capacity == 0:
             ideal_capacity = 1
         percent = crowd / ideal_capacity
@@ -201,22 +201,31 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                     html.Td(col),
                     html.Td(int(row[col]), className="fs-2 fw-bold")
                 ]))
-        # Water animation placeholder
+        # Water animation wraps the card
         water_id = f"water-{row['Gym'].replace(' ', '-')}-card"
-        rows.insert(0, html.Tr([
-            html.Td(colSpan=2, children=html.Div([
+        # Choose card background color based on crowd percentage
+        crowd_color = _colour(crowd, area)
+        bg_map = {
+            "success": "linear-gradient(160deg,#e3fce3 0%,#b2f5ea 100%)",
+            "warning": "linear-gradient(160deg,#fffde4 0%,#ffe0b2 100%)",
+            "danger": "linear-gradient(160deg,#ffe3e3 0%,#ffb2b2 100%)"
+        }
+        card_bg = bg_map.get(crowd_color, "#e3f2fd")
+        cards.append(
+            dbc.Col(
                 html.Div(
                     id=water_id,
                     style={
                         "position": "relative",
-                        "height": "60px",
+                        "height": "320px",
                         "width": "100%",
-                        "background": "#e3f2fd",
-                        "borderRadius": "12px",
+                        "background": card_bg,
+                        "borderRadius": "18px",
                         "overflow": "hidden",
-                        "boxShadow": "inset 0 2px 8px #90caf9"
+                        "boxShadow": "0 4px 24px 0 rgba(60,60,60,0.08), 0 1.5px 6px 0 rgba(60,60,60,0.04)"
                     },
                     children=[
+                        # Water fill
                         html.Div(
                             style={
                                 "position": "absolute",
@@ -226,9 +235,13 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                                 "height": f"{int(percent*100)}%",
                                 "background": "linear-gradient(180deg,#42a5f5 0%,#90caf9 100%)",
                                 "transition": "height 0.8s cubic-bezier(.4,0,.2,1)",
-                                "zIndex": 1
+                                "borderBottomLeftRadius": "18px",
+                                "borderBottomRightRadius": "18px",
+                                "zIndex": 1,
+                                "opacity": 0.85
                             },
                         ),
+                        # Card content
                         html.Div(
                             style={
                                 "position": "absolute",
@@ -238,37 +251,30 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                                 "height": "100%",
                                 "zIndex": 2,
                                 "pointerEvents": "none",
-                                "mixBlendMode": "multiply"
+                                "display": "flex",
+                                "flexDirection": "column",
+                                "justifyContent": "space-between"
                             },
                             children=[
-                                html.Span(f"{int(percent*100)}% full", style={"position": "absolute", "right": 8, "top": 8, "color": "#1565c0", "fontWeight": "bold", "fontSize": "1.1em"})
-                            ]
-                        )
-                    ]
-                )
-            ]))
-        ]))
-        # End water animation placeholder
-        cards.append(
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader(row["Gym"], className="text-center fw-semibold"),
-                        dbc.CardBody(
-                            [
+                                # Header and badge
+                                html.Div([
+                                    html.Div(row["Gym"], style={"fontWeight": "600", "fontSize": "1.35em", "textAlign": "center", "marginTop": "10px"}),
+                                    html.Span(f"{int(percent*100)}% full", style={
+                                        "position": "absolute", "right": 18, "top": 18,
+                                        "background": "#1565c0", "color": "#fff", "borderRadius": "12px", "padding": "2px 12px", "fontWeight": "bold", "fontSize": "1em", "boxShadow": "0 2px 8px #90caf9", "zIndex": 3
+                                    })
+                                ], style={"position": "relative"}),
+                                # Stats table
                                 html.Table(
                                     rows,
                                     className="table table-borderless mb-3 text-center",
+                                    style={"marginTop": "8px", "marginBottom": "0"}
                                 ),
-                                html.Small(ts_label, className="text-muted"),
-                            ],
-                            className="p-3",
-                        ),
-                    ],
-                    color=_colour(crowd, area),
-                    outline=True,
-                    className="shadow h-100 border-3",
-                    style={"borderColor": "var(--bs-card-bg)"},
+                                # Timestamp
+                                html.Small(ts_label, className="text-muted", style={"marginBottom": "10px", "marginLeft": "8px"})
+                            ]
+                        )
+                    ]
                 ),
                 xs=12,
                 sm=6,
@@ -306,6 +312,42 @@ if __name__ == "__main__":
         {%scripts%}
         {%renderer%}
     </footer>
+    <script>
+    // Gyroscope water animation for all water-* elements
+    function animateWaterGyro() {
+        const waterDivs = document.querySelectorAll('[id^="water-"]');
+        let tiltX = 0, tiltY = 0;
+        let hasGyro = false;
+        function updateWater() {
+            waterDivs.forEach(div => {
+                const fill = div.querySelector('div');
+                if (fill) {
+                    // Tilt the water fill using rotateZ
+                    fill.style.transform = `skewX(${tiltY/6}deg) skewY(${tiltX/8}deg)`;
+                }
+            });
+        }
+        if (window.DeviceOrientationEvent) {
+            window.addEventListener('deviceorientation', function(e) {
+                hasGyro = true;
+                tiltX = e.beta || 0;
+                tiltY = e.gamma || 0;
+                updateWater();
+            });
+        }
+        // Fallback: gentle wave animation if no gyroscope
+        if (!hasGyro) {
+            let t = 0;
+            setInterval(() => {
+                t += 0.05;
+                tiltX = Math.sin(t) * 6;
+                tiltY = Math.cos(t) * 4;
+                updateWater();
+            }, 60);
+        }
+    }
+    document.addEventListener('DOMContentLoaded', animateWaterGyro);
+    </script>
 </body>
 </html>
 """
