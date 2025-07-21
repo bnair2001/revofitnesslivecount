@@ -1,5 +1,6 @@
 def _extract_gym_area_and_address(soup):
     import re
+
     AREA_RE = re.compile(r"(\d[\d,]*)")
     AREA_LABELS = ("sq/m", "sqm", "m²")
     address = {}
@@ -29,6 +30,8 @@ def _extract_gym_area_and_address(soup):
         else:
             area[gym_name] = 0
     return address, area
+
+
 """
 Periodically scrape the Revo Fitness live-member page
 and store counts in PostgreSQL.
@@ -111,7 +114,14 @@ def scrape_once():
                 gym_size = area.get(gym_name, 0)
                 gym_address = address.get(gym_name, "")
                 if not gym:
-                    ses.add(Gym(state=state, name=gym_name, size_sqm=gym_size, address=gym_address))
+                    ses.add(
+                        Gym(
+                            state=state,
+                            name=gym_name,
+                            size_sqm=gym_size,
+                            address=gym_address,
+                        )
+                    )
                 else:
                     updated = False
                     if gym.size_sqm != gym_size:
@@ -128,10 +138,18 @@ def scrape_once():
         for gym_name, cnt in counts.items():
             gym = ses.query(Gym).filter_by(name=gym_name).first()
             if not gym:
-                guessed_state = next((st for st, gyms in state_map.items() if gym_name in gyms), "UNKNOWN")
+                guessed_state = next(
+                    (st for st, gyms in state_map.items() if gym_name in gyms),
+                    "UNKNOWN",
+                )
                 gym_size = area.get(gym_name, 0)
                 gym_address = address.get(gym_name, "")
-                gym = Gym(state=guessed_state, name=gym_name, size_sqm=gym_size, address=gym_address)
+                gym = Gym(
+                    state=guessed_state,
+                    name=gym_name,
+                    size_sqm=gym_size,
+                    address=gym_address,
+                )
                 ses.add(gym)
                 ses.flush()
             ses.add(LiveCount(gym_id=gym.id, count=cnt))

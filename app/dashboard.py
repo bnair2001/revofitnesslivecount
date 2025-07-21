@@ -174,7 +174,11 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         live = _get_latest_counts(state)
         if live.empty or live["ts"].dropna().empty:
             return html.Div("No data yet.", className="text-center fs-4 text-muted")
-        df = live[["name", "count", "size_sqm"]].rename(columns={"name": "Gym", "count": "Now", "size_sqm": "Area (sqm)"}).set_index("Gym")
+        df = (
+            live[["name", "count", "size_sqm"]]
+            .rename(columns={"name": "Gym", "count": "Now", "size_sqm": "Area (sqm)"})
+            .set_index("Gym")
+        )
         df["Now"] = df["Now"].astype(int)
         df.reset_index(inplace=True)
         ts_label = f"Updated {_localise(live['ts'].max(), offset)}"
@@ -192,15 +196,23 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         rows = []
         for col in df.columns[1:]:
             if col == "Area (sqm)":
-                rows.append(html.Tr([
-                    html.Td("Area (sqm)"),
-                    html.Td(f"{row[col]:,}" if row[col] else "-", className="fs-5 fw-normal")
-                ]))
+                rows.append(
+                    html.Tr(
+                        [
+                            html.Td("Area (sqm)"),
+                            html.Td(
+                                f"{row[col]:,}" if row[col] else "-",
+                                className="fs-5 fw-normal",
+                            ),
+                        ]
+                    )
+                )
             else:
-                rows.append(html.Tr([
-                    html.Td(col),
-                    html.Td(int(row[col]), className="fs-2 fw-bold")
-                ]))
+                rows.append(
+                    html.Tr(
+                        [html.Td(col), html.Td(int(row[col]), className="fs-2 fw-bold")]
+                    )
+                )
         # Water animation wraps the card
         water_id = f"water-{row['Gym'].replace(' ', '-')}-card"
         # Choose card background color based on crowd percentage
@@ -208,7 +220,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         bg_map = {
             "success": "linear-gradient(160deg,#e3fce3 0%,#b2f5ea 100%)",
             "warning": "linear-gradient(160deg,#fffde4 0%,#ffe0b2 100%)",
-            "danger": "linear-gradient(160deg,#ffe3e3 0%,#ffb2b2 100%)"
+            "danger": "linear-gradient(160deg,#ffe3e3 0%,#ffb2b2 100%)",
         }
         card_bg = bg_map.get(crowd_color, "#e3f2fd")
         cards.append(
@@ -222,7 +234,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                         "background": card_bg,
                         "borderRadius": "18px",
                         "overflow": "hidden",
-                        "boxShadow": "0 4px 24px 0 rgba(60,60,60,0.08), 0 1.5px 6px 0 rgba(60,60,60,0.04)"
+                        "boxShadow": "0 4px 24px 0 rgba(60,60,60,0.08), 0 1.5px 6px 0 rgba(60,60,60,0.04)",
                     },
                     children=[
                         # Water fill
@@ -238,7 +250,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                                 "borderBottomLeftRadius": "18px",
                                 "borderBottomRightRadius": "18px",
                                 "zIndex": 1,
-                                "opacity": 0.85
+                                "opacity": 0.85,
                             },
                         ),
                         # Card content
@@ -253,28 +265,55 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                                 "pointerEvents": "none",
                                 "display": "flex",
                                 "flexDirection": "column",
-                                "justifyContent": "space-between"
+                                "justifyContent": "space-between",
                             },
                             children=[
                                 # Header and badge
-                                html.Div([
-                                    html.Div(row["Gym"], style={"fontWeight": "600", "fontSize": "1.35em", "textAlign": "center", "marginTop": "10px"}),
-                                    html.Span(f"{int(percent*100)}% full", style={
-                                        "position": "absolute", "right": 18, "top": 18,
-                                        "background": "#1565c0", "color": "#fff", "borderRadius": "12px", "padding": "2px 12px", "fontWeight": "bold", "fontSize": "1em", "boxShadow": "0 2px 8px #90caf9", "zIndex": 3
-                                    })
-                                ], style={"position": "relative"}),
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            row["Gym"],
+                                            style={
+                                                "fontWeight": "600",
+                                                "fontSize": "1.35em",
+                                                "textAlign": "center",
+                                                "marginTop": "10px",
+                                            },
+                                        ),
+                                        html.Span(
+                                            f"{int(percent*100)}% full",
+                                            style={
+                                                "position": "absolute",
+                                                "right": 18,
+                                                "top": 18,
+                                                "background": "#1565c0",
+                                                "color": "#fff",
+                                                "borderRadius": "12px",
+                                                "padding": "2px 12px",
+                                                "fontWeight": "bold",
+                                                "fontSize": "1em",
+                                                "boxShadow": "0 2px 8px #90caf9",
+                                                "zIndex": 3,
+                                            },
+                                        ),
+                                    ],
+                                    style={"position": "relative"},
+                                ),
                                 # Stats table
                                 html.Table(
                                     rows,
                                     className="table table-borderless mb-3 text-center",
-                                    style={"marginTop": "8px", "marginBottom": "0"}
+                                    style={"marginTop": "8px", "marginBottom": "0"},
                                 ),
                                 # Timestamp
-                                html.Small(ts_label, className="text-muted", style={"marginBottom": "10px", "marginLeft": "8px"})
-                            ]
-                        )
-                    ]
+                                html.Small(
+                                    ts_label,
+                                    className="text-muted",
+                                    style={"marginBottom": "10px", "marginLeft": "8px"},
+                                ),
+                            ],
+                        ),
+                    ],
                 ),
                 xs=12,
                 sm=6,
