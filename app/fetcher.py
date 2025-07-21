@@ -1,7 +1,39 @@
+def _extract_gym_area_and_address(soup):
+    import re
+    AREA_RE = re.compile(r"(\d[\d,]*)")
+    AREA_LABELS = ("sq/m", "sqm", "m²")
+    address = {}
+    area = {}
+    for card in soup.select("[data-counter-card]"):
+        gym_name = card.get("data-counter-card")
+        if not gym_name:
+            continue
+        # Address
+        addr_span = card.select_one("div[data-address] span")
+        if addr_span:
+            address[gym_name] = addr_span.get_text(strip=True)
+        # Area
+        area_span = next(
+            (
+                span
+                for span in card.select("span.is-h6")
+                if any(lbl in span.get_text().lower() for lbl in AREA_LABELS)
+            ),
+            None,
+        )
+        if area_span is None and addr_span:
+            area_span = addr_span.find_parent().find_next("span", class_="is-h6")
+        if area_span:
+            m = AREA_RE.search(area_span.get_text())
+            area[gym_name] = int(m.group(1).replace(",", "")) if m else 0
+        else:
+            area[gym_name] = 0
+    return address, area
 """
 Periodically scrape the Revo Fitness live-member page
 and store counts in PostgreSQL.
 """
+
 import logging
 from collections import defaultdict
 
@@ -68,30 +100,40 @@ def scrape_once():
 
     state_map = _extract_state_map(select)
     counts = _extract_counts(soup)
+    address, area = _extract_gym_area_and_address(soup)
 
     ses = Session()
     try:
-        # ensure all gyms exist
+        # ensure all gyms exist, update area if changed
         for state, gyms in state_map.items():
             for gym_name in gyms:
-                if not ses.query(Gym.id).filter_by(name=gym_name).first():
-                    ses.add(Gym(state=state, name=gym_name))
-        ses.flush()  # lets us query Gym ids without committing yet
+                gym = ses.query(Gym).filter_by(name=gym_name).first()
+                gym_size = area.get(gym_name, 0)
+                gym_address = address.get(gym_name, "")
+                if not gym:
+                    ses.add(Gym(state=state, name=gym_name, size_sqm=gym_size, address=gym_address))
+                else:
+                    updated = False
+                    if gym.size_sqm != gym_size:
+                        gym.size_sqm = gym_size
+                        updated = True
+                    if gym.address != gym_address:
+                        gym.address = gym_address
+                        updated = True
+                    if updated:
+                        ses.add(gym)
+        ses.flush()
 
         # Insert live counts (get-or-create for gyms found only in <span>)
         for gym_name, cnt in counts.items():
             gym = ses.query(Gym).filter_by(name=gym_name).first()
             if not gym:
-                # seen in <span> but missing from dropdown
-                # try to guess state from state_map, else UNKNOWN
-                guessed_state = next(
-                    (st for st, gyms in state_map.items() if gym_name in gyms),
-                    "UNKNOWN",
-                )
-                gym = Gym(state=guessed_state, name=gym_name)
+                guessed_state = next((st for st, gyms in state_map.items() if gym_name in gyms), "UNKNOWN")
+                gym_size = area.get(gym_name, 0)
+                gym_address = address.get(gym_name, "")
+                gym = Gym(state=guessed_state, name=gym_name, size_sqm=gym_size, address=gym_address)
                 ses.add(gym)
                 ses.flush()
-
             ses.add(LiveCount(gym_id=gym.id, count=cnt))
 
         ses.commit()

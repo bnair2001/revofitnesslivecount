@@ -43,18 +43,34 @@ def _get_latest_counts(state: str) -> pd.DataFrame:
     ).subquery()
     # Join Gym with latest LiveCount per gym
     q = (
-        ses.query(Gym.name, subq.c.count, subq.c.ts)
+        ses.query(Gym.name, subq.c.count, subq.c.ts, Gym.size_sqm)
         .join(subq, Gym.id == subq.c.gym_id)
         .filter(and_(subq.c.rn == 1, Gym.state == state))
         .order_by(Gym.name)
     )
-    df = pd.DataFrame(q.all(), columns=["name", "count", "ts"])
+    df = pd.DataFrame(q.all(), columns=["name", "count", "ts", "size_sqm"])
     ses.close()
     return df
 
 
-def _colour(c: int) -> str:
-    return "success" if c < 40 else "warning" if c < 60 else "danger"
+def _colour(crowd: int, area: int | None) -> str:
+    """
+    Returns a color based on crowd percentage using area and count.
+    7 sqm per person is ideal. If area is missing, fallback to old logic.
+    """
+    if area and area > 0:
+        ideal_capacity = area // 7
+        if ideal_capacity == 0:
+            ideal_capacity = 1
+        percent = crowd / ideal_capacity
+        if percent < 0.5:
+            return "success"
+        elif percent < 0.8:
+            return "warning"
+        else:
+            return "danger"
+    # fallback if area is not available
+    return "success" if crowd < 40 else "warning" if crowd < 60 else "danger"
 
 
 def _localise(utc_dt: dt.datetime, offset_min: int | None) -> str:
@@ -158,11 +174,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
         live = _get_latest_counts(state)
         if live.empty or live["ts"].dropna().empty:
             return html.Div("No data yet.", className="text-center fs-4 text-muted")
-        df = (
-            live[["name", "count"]]
-            .rename(columns={"name": "Gym", "count": "Now"})
-            .set_index("Gym")
-        )
+        df = live[["name", "count", "size_sqm"]].rename(columns={"name": "Gym", "count": "Now", "size_sqm": "Area (sqm)"}).set_index("Gym")
         df["Now"] = df["Now"].astype(int)
         df.reset_index(inplace=True)
         ts_label = f"Updated {_localise(live['ts'].max(), offset)}"
@@ -171,12 +183,72 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
     # ── build cards ───────────────────────────────────────────────────────
     cards = []
     for _, row in df.iterrows():
-        rows = [
-            html.Tr(
-                [html.Td(col), html.Td(int(row[col]), className="fs-2 fw-bold")],
-            )
-            for col in df.columns[1:]
-        ]
+        area = row.get("Area (sqm)", None)
+        crowd = int(row[colour_col])
+        percent = 0
+        if area and area > 0:
+            ideal_capacity = area // 7 if area // 7 > 0 else 1
+            percent = min(1.0, crowd / ideal_capacity)
+        rows = []
+        for col in df.columns[1:]:
+            if col == "Area (sqm)":
+                rows.append(html.Tr([
+                    html.Td("Area (sqm)"),
+                    html.Td(f"{row[col]:,}" if row[col] else "-", className="fs-5 fw-normal")
+                ]))
+            else:
+                rows.append(html.Tr([
+                    html.Td(col),
+                    html.Td(int(row[col]), className="fs-2 fw-bold")
+                ]))
+        # Water animation placeholder
+        water_id = f"water-{row['Gym'].replace(' ', '-')}-card"
+        rows.insert(0, html.Tr([
+            html.Td(colSpan=2, children=html.Div([
+                html.Div(
+                    id=water_id,
+                    style={
+                        "position": "relative",
+                        "height": "60px",
+                        "width": "100%",
+                        "background": "#e3f2fd",
+                        "borderRadius": "12px",
+                        "overflow": "hidden",
+                        "boxShadow": "inset 0 2px 8px #90caf9"
+                    },
+                    children=[
+                        html.Div(
+                            style={
+                                "position": "absolute",
+                                "bottom": 0,
+                                "left": 0,
+                                "width": "100%",
+                                "height": f"{int(percent*100)}%",
+                                "background": "linear-gradient(180deg,#42a5f5 0%,#90caf9 100%)",
+                                "transition": "height 0.8s cubic-bezier(.4,0,.2,1)",
+                                "zIndex": 1
+                            },
+                        ),
+                        html.Div(
+                            style={
+                                "position": "absolute",
+                                "top": 0,
+                                "left": 0,
+                                "width": "100%",
+                                "height": "100%",
+                                "zIndex": 2,
+                                "pointerEvents": "none",
+                                "mixBlendMode": "multiply"
+                            },
+                            children=[
+                                html.Span(f"{int(percent*100)}% full", style={"position": "absolute", "right": 8, "top": 8, "color": "#1565c0", "fontWeight": "bold", "fontSize": "1.1em"})
+                            ]
+                        )
+                    ]
+                )
+            ]))
+        ]))
+        # End water animation placeholder
         cards.append(
             dbc.Col(
                 dbc.Card(
@@ -193,7 +265,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                             className="p-3",
                         ),
                     ],
-                    color=_colour(int(row[colour_col])),
+                    color=_colour(crowd, area),
                     outline=True,
                     className="shadow h-100 border-3",
                     style={"borderColor": "var(--bs-card-bg)"},
