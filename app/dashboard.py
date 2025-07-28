@@ -2,7 +2,7 @@ import datetime as dt
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, ctx
+from dash import dcc, html, Input, Output
 import pandas as pd
 from sqlalchemy import func, and_, desc
 
@@ -11,7 +11,9 @@ from db import Session
 from fetcher import start_scheduler, scrape_once
 from prediction import predict
 
+# Initial scrape and setup
 scrape_once()  # Initial scrape to populate DB
+_last_fetch = dt.datetime.now()  # Track last fetch time
 start_scheduler()  # spin up background job
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
@@ -148,8 +150,12 @@ app.clientside_callback(
     prevent_initial_call=False,
 )
 def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
-    if ctx.triggered_id == "refresh-btn":
+    global _last_fetch
+    # Only fetch if it's been more than 60 seconds since last fetch
+    now = dt.datetime.now()
+    if (now - _last_fetch).total_seconds() >= 60:
         scrape_once()
+        _last_fetch = now
 
     offset = int(tz_offset or 0)
     show_pred = "pred" in toggle_vals
