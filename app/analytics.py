@@ -71,6 +71,28 @@ def get_peak_hours_analysis(state: str, days: int = 30, gym_name: str = None) ->
     weekend_pattern = df[df.is_weekend].groupby("hour")["count"].mean()
     weekday_pattern = df[~df.is_weekend].groupby("hour")["count"].mean()
 
+    # Detailed weekend vs weekday analysis
+    weekend_peak = weekend_pattern.idxmax() if not weekend_pattern.empty else None
+    weekday_peak = weekday_pattern.idxmax() if not weekday_pattern.empty else None
+    weekend_quiet = weekend_pattern.idxmin() if not weekend_pattern.empty else None
+    weekday_quiet = weekday_pattern.idxmin() if not weekday_pattern.empty else None
+
+    # Compare peak hours
+    peak_shift = None
+    if weekend_peak is not None and weekday_peak is not None:
+        peak_shift = int(weekend_peak) - int(weekday_peak)
+
+    # Find busiest day type
+    weekend_avg = weekend_pattern.mean() if not weekend_pattern.empty else 0
+    weekday_avg = weekday_pattern.mean() if not weekday_pattern.empty else 0
+    busier_time = "weekends" if weekend_avg > weekday_avg else "weekdays"
+
+    # Calculate percentage difference
+    if weekday_avg > 0:
+        pct_diff = round(((weekend_avg - weekday_avg) / weekday_avg) * 100, 1)
+    else:
+        pct_diff = 0
+
     return {
         "peak_hour": int(peak_hour),
         "peak_count": round(hourly_avg.max(), 1),
@@ -78,6 +100,15 @@ def get_peak_hours_analysis(state: str, days: int = 30, gym_name: str = None) ->
         "hourly_averages": hourly_avg.to_dict(),
         "weekend_pattern": weekend_pattern.to_dict(),
         "weekday_pattern": weekday_pattern.to_dict(),
+        "weekend_peak": int(weekend_peak) if weekend_peak is not None else None,
+        "weekday_peak": int(weekday_peak) if weekday_peak is not None else None,
+        "weekend_quiet": int(weekend_quiet) if weekend_quiet is not None else None,
+        "weekday_quiet": int(weekday_quiet) if weekday_quiet is not None else None,
+        "peak_shift": peak_shift,
+        "busier_time": busier_time,
+        "crowd_difference_pct": pct_diff,
+        "weekend_avg": round(weekend_avg, 1),
+        "weekday_avg": round(weekday_avg, 1),
     }
 
 
@@ -106,11 +137,11 @@ def create_trends_chart(state: str, days: int = 7, gym_name: str = None):
 
     # Set title based on gym selection
     title = "7-Day Crowd Trends"
-    if gym_name and gym_name != 'all':
+    if gym_name and gym_name != "all":
         title += f" - {gym_name}"
     else:
         title += f" - {state}"
-    
+
     fig = px.line(
         df_hourly,
         x="timestamp",
@@ -161,11 +192,11 @@ def create_heatmap_chart(state: str, gym_name: str = None, days: int = 30):
 
     # Set title based on gym selection
     title = "Average Crowd by Hour and Day"
-    if gym_name and gym_name != 'all':
+    if gym_name and gym_name != "all":
         title += f" - {gym_name}"
     else:
         title += f" - {state}"
-    
+
     fig.update_layout(
         title=title,
         xaxis_title="Hour of Day",
@@ -216,11 +247,11 @@ def get_summary_stats(state: str, days: int = 30, gym_name: str = None) -> dict:
     peak_total = df.groupby("timestamp")["count"].sum().max()
 
     # Context-specific stats
-    if gym_name and gym_name != 'all':
+    if gym_name and gym_name != "all":
         # Single gym stats
         gym_data = df[df["name"] == gym_name]
         avg_capacity = gym_data["capacity_pct"].mean() if not gym_data.empty else 0
-        
+
         return {
             "total_gyms": 1,
             "total_records": total_records,
@@ -235,7 +266,7 @@ def get_summary_stats(state: str, days: int = 30, gym_name: str = None) -> dict:
         # Multi-gym stats
         gym_avg = df.groupby("name")["count"].mean()
         busiest_gym = gym_avg.idxmax()
-        
+
         return {
             "total_gyms": total_gyms,
             "total_records": total_records,

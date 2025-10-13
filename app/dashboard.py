@@ -42,7 +42,7 @@ def _gym_options(state: str):
     """Return gym dropdown options for a specific state"""
     if not state:
         return [{"label": "All Gyms", "value": "all"}]
-    
+
     ses = Session()
     try:
         gyms = ses.query(Gym.name).filter_by(state=state).order_by(Gym.name).all()
@@ -167,7 +167,7 @@ app.clientside_callback(
     """,
     Output("refresh-spinner", "style", allow_duplicate=True),
     Input("crowd-cards", "children"),
-    prevent_initial_call=True
+    prevent_initial_call=True,
 )
 
 
@@ -603,7 +603,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
 def update_analytics(state, gym, days):
     try:
         # Summary stats
-        gym_filter = None if gym == 'all' else gym
+        gym_filter = None if gym == "all" else gym
         stats = get_summary_stats(state, days, gym_filter)
 
         summary_cards = []
@@ -621,9 +621,11 @@ def update_analytics(state, gym, days):
                                                 className="card-title text-primary",
                                             ),
                                             html.P(
-                                "Gym Count" if stats.get("is_single_gym", False) else "Total Gyms",
-                                className="card-text"
-                            ),
+                                                "Gym Count"
+                                                if stats.get("is_single_gym", False)
+                                                else "Total Gyms",
+                                                className="card-text",
+                                            ),
                                         ]
                                     )
                                 ]
@@ -679,12 +681,17 @@ def update_analytics(state, gym, days):
                                     dbc.CardBody(
                                         [
                                             html.H4(
-                                                stats.get("avg_capacity_pct", stats.get("busiest_gym", "N/A")),
+                                                stats.get(
+                                                    "avg_capacity_pct",
+                                                    stats.get("busiest_gym", "N/A"),
+                                                ),
                                                 className="card-title text-info",
                                             ),
                                             html.P(
-                                                "Avg Capacity %" if stats.get("is_single_gym", False) else "Busiest Gym",
-                                                className="card-text"
+                                                "Avg Capacity %"
+                                                if stats.get("is_single_gym", False)
+                                                else "Busiest Gym",
+                                                className="card-text",
                                             ),
                                         ]
                                     )
@@ -711,6 +718,24 @@ def update_analytics(state, gym, days):
             peak_hour = peak_data["peak_hour"]
             quiet_hour = peak_data["quietest_hour"]
             peak_count = peak_data["peak_count"]
+            weekend_peak = peak_data.get("weekend_peak")
+            weekday_peak = peak_data.get("weekday_peak")
+            peak_shift = peak_data.get("peak_shift", 0)
+            busier_time = peak_data.get("busier_time", "weekdays")
+            crowd_diff = peak_data.get("crowd_difference_pct", 0)
+            weekend_avg = peak_data.get("weekend_avg", 0)
+            weekday_avg = peak_data.get("weekday_avg", 0)
+
+            # Create detailed analysis text
+            if weekend_peak and weekday_peak:
+                if peak_shift > 0:
+                    shift_text = f"Weekend peaks {peak_shift}h later ({weekday_peak}:00 → {weekend_peak}:00)"
+                elif peak_shift < 0:
+                    shift_text = f"Weekend peaks {abs(peak_shift)}h earlier ({weekday_peak}:00 → {weekend_peak}:00)"
+                else:
+                    shift_text = f"Similar peak times (both ~{weekday_peak}:00)"
+            else:
+                shift_text = "Insufficient weekend/weekday data"
 
             peak_analysis = dbc.Card(
                 [
@@ -721,22 +746,29 @@ def update_analytics(state, gym, days):
                                 [
                                     dbc.Col(
                                         [
+                                            html.H6(
+                                                "Overall Patterns", className="mb-3"
+                                            ),
                                             html.P(
                                                 [
                                                     html.Strong("Peak Hour: "),
-                                                    f"{peak_hour}:00",
+                                                    f"{peak_hour}:00 ({peak_count} people)",
                                                 ]
                                             ),
                                             html.P(
                                                 [
-                                                    html.Strong("Peak Count: "),
-                                                    str(peak_count),
-                                                ]
-                                            ),
-                                            html.P(
-                                                [
-                                                    html.Strong("Quietest: "),
+                                                    html.Strong("Quietest Hour: "),
                                                     f"{quiet_hour}:00",
+                                                ]
+                                            ),
+                                            html.P(
+                                                [
+                                                    html.Strong("Busier Period: "),
+                                                    f"{busier_time.capitalize()} ",
+                                                    html.Span(
+                                                        f"({abs(crowd_diff)}% {'more' if crowd_diff > 0 else 'less'} crowded)",
+                                                        className="text-muted",
+                                                    ),
                                                 ]
                                             ),
                                         ],
@@ -744,34 +776,67 @@ def update_analytics(state, gym, days):
                                     ),
                                     dbc.Col(
                                         [
-                                            html.H6("Visit Planning Tips"),
+                                            html.H6(
+                                                "Weekend vs Weekday", className="mb-3"
+                                            ),
+                                            html.P(
+                                                [
+                                                    html.Strong("Peak Shift: "),
+                                                    shift_text,
+                                                ],
+                                                className="mb-2",
+                                            ),
+                                            html.P(
+                                                [
+                                                    html.Strong("Weekend Avg: "),
+                                                    f"{weekend_avg} people",
+                                                ],
+                                                className="mb-2",
+                                            ),
+                                            html.P(
+                                                [
+                                                    html.Strong("Weekday Avg: "),
+                                                    f"{weekday_avg} people",
+                                                ],
+                                                className="mb-3",
+                                            ),
+                                            html.H6(
+                                                "📅 Planning Tips", className="mb-2"
+                                            ),
                                             html.Ul(
                                                 [
                                                     html.Li(
                                                         [
-                                                            "Busiest: ",
-                                                            html.Strong(
-                                                                f"{peak_hour}:00"
-                                                            ),
-                                                            " (avoid crowds)",
-                                                        ]
-                                                    ),
-                                                    html.Li(
-                                                        [
-                                                            "Quietest: ",
+                                                            "Best time: ",
                                                             html.Strong(
                                                                 f"{quiet_hour}:00",
                                                                 className="text-success",
                                                             ),
-                                                            " (ideal time!)",
+                                                            " (least crowded)",
+                                                        ]
+                                                    ),
+                                                    html.Li(
+                                                        [
+                                                            "Avoid: ",
+                                                            html.Strong(
+                                                                f"{peak_hour}:00",
+                                                                className="text-warning",
+                                                            ),
+                                                            " (busiest)",
+                                                        ]
+                                                    ),
+                                                    html.Li(
+                                                        [
+                                                            "Weekend tip: Peak at ",
+                                                            html.Strong(
+                                                                f"{weekend_peak}:00"
+                                                                if weekend_peak
+                                                                else "similar times"
+                                                            ),
                                                         ]
                                                     ),
                                                 ],
-                                                className="mb-2",
-                                            ),
-                                            html.Small(
-                                                "Weekend peaks shift later",
-                                                className="text-muted",
+                                                className="mb-0",
                                             ),
                                         ],
                                         md=6,
