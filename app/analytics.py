@@ -7,10 +7,43 @@ import datetime as dt
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pytz
 
 from sqlalchemy import select, and_
 from models import LiveCount, Gym
 from db import Session
+
+
+def get_local_timezone(state: str) -> str:
+    """Get appropriate timezone for Australian state"""
+    timezone_map = {
+        "SA": "Australia/Adelaide",  # South Australia (UTC+9:30/+10:30)
+        "WA": "Australia/Perth",  # Western Australia (UTC+8)
+        "NSW": "Australia/Sydney",  # New South Wales (UTC+10/+11)
+        "VIC": "Australia/Melbourne",  # Victoria (UTC+10/+11)
+        "QLD": "Australia/Brisbane",  # Queensland (UTC+10)
+        "NT": "Australia/Darwin",  # Northern Territory (UTC+9:30)
+        "TAS": "Australia/Hobart",  # Tasmania (UTC+10/+11)
+        "ACT": "Australia/Sydney",  # Australian Capital Territory (UTC+10/+11)
+    }
+    return timezone_map.get(state, "Australia/Sydney")  # Default to Sydney
+
+
+def convert_to_local_time(df: pd.DataFrame, state: str) -> pd.DataFrame:
+    """Convert UTC timestamps to local timezone for the given state"""
+    if df.empty:
+        return df
+
+    local_tz = pytz.timezone(get_local_timezone(state))
+
+    # Ensure timestamp is timezone-aware (assume UTC if naive)
+    if df["timestamp"].dt.tz is None:
+        df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
+
+    # Convert to local timezone
+    df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
+
+    return df
 
 
 def get_gym_trends(state: str, days: int = 30, gym_name: str = None) -> pd.DataFrame:
@@ -36,7 +69,10 @@ def get_gym_trends(state: str, days: int = 30, gym_name: str = None) -> pd.DataF
         df = pd.read_sql(stmt, ses.bind, parse_dates=["timestamp"])
 
         if not df.empty:
-            # Add derived columns
+            # Convert to local timezone for accurate hour analysis
+            df = convert_to_local_time(df, state)
+
+            # Add derived columns (now using local time)
             df["hour"] = df.timestamp.dt.hour
             df["weekday"] = df.timestamp.dt.day_name()
             df["is_weekend"] = df.timestamp.dt.weekday.isin([5, 6])

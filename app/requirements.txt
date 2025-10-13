@@ -8,3 +8,4 @@ psycopg2-binary==2.9.9
 APScheduler==3.10.4
 statsmodels==0.14.2
 plotly==5.17.0
+pytz==2024.1
