@@ -337,7 +337,11 @@ def create_analytics_tab():
         dcc.Loading(
             id="loading-summary", type="default", children=html.Div(id="summary-cards")
         ),
-        # Charts
+        # Peak hours analysis (moved above charts)
+        dcc.Loading(
+            id="loading-peak", type="default", children=html.Div(id="peak-analysis")
+        ),
+        # Charts (improved for mobile)
         dbc.Row(
             [
                 dbc.Col(
@@ -345,27 +349,41 @@ def create_analytics_tab():
                         dcc.Loading(
                             id="loading-trends",
                             type="default",
-                            children=dcc.Graph(id="trends-chart"),
+                            children=dcc.Graph(
+                                id="trends-chart",
+                                config={
+                                    'displayModeBar': True,
+                                    'displaylogo': False,
+                                    'modeBarButtonsToRemove': ['pan2d', 'lasso2d', 'select2d']
+                                }
+                            ),
                         )
                     ],
-                    md=6,
+                    xs=12,  # Full width on mobile
+                    lg=6,   # Half width on large screens
+                    className="mb-3",
                 ),
                 dbc.Col(
                     [
                         dcc.Loading(
                             id="loading-heatmap",
                             type="default",
-                            children=dcc.Graph(id="heatmap-chart"),
+                            children=dcc.Graph(
+                                id="heatmap-chart",
+                                config={
+                                    'displayModeBar': True,
+                                    'displaylogo': False,
+                                    'modeBarButtonsToRemove': ['pan2d', 'lasso2d', 'select2d']
+                                }
+                            ),
                         )
                     ],
-                    md=6,
+                    xs=12,  # Full width on mobile
+                    lg=6,   # Half width on large screens
+                    className="mb-3",
                 ),
             ],
             className="mb-4",
-        ),
-        # Peak hours analysis
-        dcc.Loading(
-            id="loading-peak", type="default", children=html.Div(id="peak-analysis")
         ),
         # Gym rankings table
         dcc.Loading(
@@ -589,9 +607,9 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
 @app.callback(
     [
         Output("summary-cards", "children"),
+        Output("peak-analysis", "children"),
         Output("trends-chart", "figure"),
         Output("heatmap-chart", "figure"),
-        Output("peak-analysis", "children"),
         Output("gym-rankings", "children"),
     ],
     [
@@ -880,7 +898,7 @@ def update_analytics(state, gym, days):
                 ]
             )
 
-        return summary_cards, trends_fig, heatmap_fig, peak_analysis, rankings_table
+        return summary_cards, peak_analysis, trends_fig, heatmap_fig, rankings_table
 
     except Exception as e:
         error_msg = html.Div(
@@ -889,7 +907,7 @@ def update_analytics(state, gym, days):
             ]
         )
         empty_fig = go.Figure()
-        return error_msg, empty_fig, empty_fig, html.Div(), html.Div()
+        return error_msg, html.Div(), empty_fig, empty_fig, html.Div()
 
 
 # ─── App layout ────────────────────────────────────────────────────────────

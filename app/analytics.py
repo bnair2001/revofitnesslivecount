@@ -188,7 +188,25 @@ def create_trends_chart(state: str, days: int = 7, gym_name: str = None):
     )
 
     fig.update_layout(
-        height=400, showlegend=True, legend=dict(orientation="v", x=1.02, y=1)
+        height=400, 
+        showlegend=True, 
+        legend=dict(
+            orientation="h",  # Horizontal legend for mobile
+            yanchor="top",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(l=40, r=40, t=60, b=100),  # Better margins for mobile
+        xaxis=dict(
+            title_font=dict(size=12),
+            tickfont=dict(size=10)
+        ),
+        yaxis=dict(
+            title_font=dict(size=12),
+            tickfont=dict(size=10)
+        ),
+        title_font=dict(size=14)
     )
 
     return fig
@@ -238,6 +256,18 @@ def create_heatmap_chart(state: str, gym_name: str = None, days: int = 30):
         xaxis_title="Hour of Day",
         yaxis_title="Day of Week",
         height=400,
+        margin=dict(l=50, r=40, t=60, b=40),  # Better margins for mobile
+        xaxis=dict(
+            title_font=dict(size=12),
+            tickfont=dict(size=10),
+            tickmode='linear',
+            dtick=2  # Show every 2nd hour to reduce clutter on mobile
+        ),
+        yaxis=dict(
+            title_font=dict(size=12),
+            tickfont=dict(size=10)
+        ),
+        title_font=dict(size=14)
     )
 
     return fig
