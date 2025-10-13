@@ -3,6 +3,7 @@ version: "3.9"
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: revo
@@ -17,6 +18,7 @@ services:
 
   dash:
     build: .
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
