@@ -4,17 +4,27 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output
 import pandas as pd
+import plotly.graph_objects as go
 from sqlalchemy import func, and_, desc
 
 from models import Gym, LiveCount
 from db import Session
 from fetcher import start_scheduler, scrape_once
 from prediction import predict
+from analytics import (
+    create_trends_chart,
+    create_heatmap_chart,
+    get_peak_hours_analysis,
+    get_gym_rankings,
+    get_summary_stats,
+)
 
 # Initial scrape and setup
 scrape_once()  # Initial scrape to populate DB
 _last_fetch = dt.datetime.now()  # Track last fetch time
 start_scheduler()  # spin up background job
+
+# Initialize single-page app with tabs
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
 
@@ -83,10 +93,49 @@ def _localise(utc_dt: dt.datetime, offset_min: int | None) -> str:
     return (utc_dt + dt.timedelta(minutes=offset_min)).strftime("%d-%b %H:%M")
 
 
-# ─── layout ───────────────────────────────────────────────────────────────
-app.layout = dbc.Container(
+# ─── App layout with tabs ──────────────────────────────────────────────────
+layout = dbc.Container(
     [
-        html.H2("Revo Fitness Live Crowd", className="display-6 text-center mb-4"),
+        html.H2("Revo Fitness Tracker", className="display-6 text-center mb-4"),
+        # Navigation tabs
+        dbc.Tabs(
+            id="main-tabs",
+            active_tab="live-tab",
+            children=[
+                dbc.Tab(label="Live Dashboard", tab_id="live-tab"),
+                dbc.Tab(label="Analytics", tab_id="analytics-tab"),
+            ],
+            className="mb-4",
+        ),
+        # Tab content
+        html.Div(id="tab-content"),
+        # Global stores and intervals
+        dcc.Store(id="tz-offset", storage_type="memory"),
+        dcc.Interval(id="auto-int", interval=60_000, n_intervals=0),
+    ],
+    fluid=True,
+)
+
+# ─── browser offset every minute ───────────────────────────────────────────
+app.clientside_callback(
+    "function(n){return -new Date().getTimezoneOffset();}",
+    Output("tz-offset", "data"),
+    Input("auto-int", "n_intervals"),
+)
+
+
+# ─── Tab content callback ──────────────────────────────────────────────────
+@app.callback(Output("tab-content", "children"), Input("main-tabs", "active_tab"))
+def render_tab_content(active_tab):
+    if active_tab == "analytics-tab":
+        return create_analytics_tab()
+    else:
+        return create_live_tab()
+
+
+def create_live_tab():
+    """Create the live dashboard tab content"""
+    return [
         dbc.Row(
             [
                 dbc.Col(
@@ -107,7 +156,7 @@ app.layout = dbc.Container(
                     dbc.Checklist(
                         id="pred-toggle",
                         options=[
-                            {"label": " Show 15-60 min prediction", "value": "pred"}
+                            {"label": " Show next hour prediction", "value": "pred"}
                         ],
                         value=[],
                         switch=True,
@@ -126,18 +175,64 @@ app.layout = dbc.Container(
             className="g-3 justify-content-center mb-4",
         ),
         html.Div(id="crowd-cards"),
-        dcc.Store(id="tz-offset", storage_type="memory"),
-        dcc.Interval(id="auto-int", interval=60_000, n_intervals=0),
-    ],
-    fluid=True,
-)
+    ]
 
-# ─── browser offset every minute ───────────────────────────────────────────
-app.clientside_callback(
-    "function(n){return -new Date().getTimezoneOffset();}",
-    Output("tz-offset", "data"),
-    Input("auto-int", "n_intervals"),
-)
+
+def create_analytics_tab():
+    """Create the analytics tab content"""
+    return [
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        dbc.Label("State", className="fw-semibold"),
+                        dcc.Dropdown(
+                            id="analytics-state-dropdown",
+                            options=_state_options(),
+                            value="SA",
+                            clearable=False,
+                        ),
+                    ],
+                    xs=12,
+                    sm=6,
+                    md=3,
+                ),
+                dbc.Col(
+                    [
+                        dbc.Label("Time Period", className="fw-semibold"),
+                        dcc.Dropdown(
+                            id="analytics-period-dropdown",
+                            options=[
+                                {"label": "Last 7 days", "value": 7},
+                                {"label": "Last 30 days", "value": 30},
+                                {"label": "Last 90 days", "value": 90},
+                            ],
+                            value=30,
+                            clearable=False,
+                        ),
+                    ],
+                    xs=12,
+                    sm=6,
+                    md=3,
+                ),
+            ],
+            className="mb-4",
+        ),
+        # Summary stats cards
+        html.Div(id="summary-cards"),
+        # Charts
+        dbc.Row(
+            [
+                dbc.Col([dcc.Graph(id="trends-chart")], md=6),
+                dbc.Col([dcc.Graph(id="heatmap-chart")], md=6),
+            ],
+            className="mb-4",
+        ),
+        # Peak hours analysis
+        html.Div(id="peak-analysis"),
+        # Gym rankings table
+        html.Div(id="gym-rankings"),
+    ]
 
 
 @app.callback(
@@ -162,24 +257,44 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
 
     # ── prediction ────────────────────────────────────────────────────────
     if show_pred:
-        base_utc = dt.datetime.utcnow().replace(
-            minute=0, second=0, microsecond=0, tzinfo=dt.timezone.utc
-        )
-        horizons = [15, 30, 45, 60]
-        frames = [
-            pd.Series(
-                predict(state, base_utc + dt.timedelta(minutes=h)), name=f"in {h} mins"
+        try:
+            base_utc = dt.datetime.now(dt.timezone.utc).replace(
+                minute=0, second=0, microsecond=0
             )
-            for h in horizons
-        ]
-        df = pd.concat(frames, axis=1).reset_index()
-        df.rename(columns={"index": "Gym"}, inplace=True)
-        ts_label = f"Predicted from {_localise(base_utc, offset)}"
-        colour_col = df.columns[1]
+
+            # Get prediction for next hour only (much faster)
+            next_hour = base_utc + dt.timedelta(hours=1)
+            predictions = predict(state, next_hour)
+
+            if not predictions:
+                return html.Div(
+                    "No prediction data available yet. Need more historical data.",
+                    className="text-center fs-4 text-muted",
+                )
+
+            # Convert to DataFrame
+            df = pd.DataFrame(list(predictions.items()), columns=["Gym", "Next Hour"])
+            ts_label = f"Predicted for {_localise(next_hour, offset)}"
+            colour_col = "Next Hour"
+
+        except Exception as e:
+            return html.Div(
+                f"Prediction temporarily unavailable: {str(e)}",
+                className="text-center fs-4 text-muted",
+            )
     else:
         live = _get_latest_counts(state)
         if live.empty or live["ts"].dropna().empty:
             return html.Div("No data yet.", className="text-center fs-4 text-muted")
+
+        # Check if data is fresh (within last 2 minutes)
+        latest_ts = live["ts"].max()
+        if (
+            latest_ts
+            and (dt.datetime.now(dt.timezone.utc) - latest_ts).total_seconds() > 120
+        ):
+            scrape_once()  # Force a refresh if data is stale
+            live = _get_latest_counts(state)  # Get fresh data
         df = (
             live[["name", "count", "size_sqm"]]
             .rename(columns={"name": "Gym", "count": "Now", "size_sqm": "Area (sqm)"})
@@ -250,7 +365,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                                 "bottom": 0,
                                 "left": 0,
                                 "width": "100%",
-                                "height": f"{int(percent*100)}%",
+                                "height": f"{int(percent * 100)}%",
                                 "background": "linear-gradient(180deg,#42a5f5 0%,#90caf9 100%)",
                                 "transition": "height 0.8s cubic-bezier(.4,0,.2,1)",
                                 "borderBottomLeftRadius": "18px",
@@ -287,7 +402,7 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
                                             },
                                         ),
                                         html.Span(
-                                            f"{int(percent*100)}% full",
+                                            f"{int(percent * 100)}% full",
                                             style={
                                                 "position": "absolute",
                                                 "right": 18,
@@ -330,6 +445,245 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
 
     return dbc.Row(cards, className="gy-4")
 
+
+# ─── Analytics callback ────────────────────────────────────────────────────
+@app.callback(
+    [
+        Output("summary-cards", "children"),
+        Output("trends-chart", "figure"),
+        Output("heatmap-chart", "figure"),
+        Output("peak-analysis", "children"),
+        Output("gym-rankings", "children"),
+    ],
+    [
+        Input("analytics-state-dropdown", "value"),
+        Input("analytics-period-dropdown", "value"),
+    ],
+)
+def update_analytics(state, days):
+    try:
+        # Summary stats
+        stats = get_summary_stats(state, days)
+
+        summary_cards = []
+        if stats:
+            summary_cards = dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H4(
+                                                stats["total_gyms"],
+                                                className="card-title text-primary",
+                                            ),
+                                            html.P("Total Gyms", className="card-text"),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ],
+                        md=2,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H4(
+                                                f"{stats['avg_total_count']}",
+                                                className="card-title text-success",
+                                            ),
+                                            html.P(
+                                                "Avg Total Count", className="card-text"
+                                            ),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ],
+                        md=2,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H4(
+                                                stats["peak_total_count"],
+                                                className="card-title text-warning",
+                                            ),
+                                            html.P(
+                                                "Peak Total Count",
+                                                className="card-text",
+                                            ),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ],
+                        md=2,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H4(
+                                                stats["busiest_gym"],
+                                                className="card-title text-info",
+                                            ),
+                                            html.P(
+                                                "Busiest Gym", className="card-text"
+                                            ),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ],
+                        md=6,
+                    ),
+                ],
+                className="mb-4",
+            )
+
+        # Charts
+        trends_fig = create_trends_chart(
+            state, min(days, 7)
+        )  # Limit trends to 7 days for performance
+        heatmap_fig = create_heatmap_chart(state, days)
+
+        # Peak hours analysis
+        peak_data = get_peak_hours_analysis(state, days)
+        peak_analysis = html.Div()
+
+        if peak_data:
+            peak_hour = peak_data["peak_hour"]
+            quiet_hour = peak_data["quietest_hour"]
+            peak_count = peak_data["peak_count"]
+
+            peak_analysis = dbc.Card(
+                [
+                    dbc.CardHeader(html.H5("Peak Hours Analysis")),
+                    dbc.CardBody(
+                        [
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            html.P(
+                                                [
+                                                    html.Strong("Peak Hour: "),
+                                                    f"{peak_hour}:00",
+                                                ]
+                                            ),
+                                            html.P(
+                                                [
+                                                    html.Strong("Peak Count: "),
+                                                    str(peak_count),
+                                                ]
+                                            ),
+                                            html.P(
+                                                [
+                                                    html.Strong("Quietest: "),
+                                                    f"{quiet_hour}:00",
+                                                ]
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.H6("Visit Planning Tips"),
+                                            html.Ul(
+                                                [
+                                                    html.Li(
+                                                        [
+                                                            "Busiest: ",
+                                                            html.Strong(
+                                                                f"{peak_hour}:00"
+                                                            ),
+                                                            " (avoid crowds)",
+                                                        ]
+                                                    ),
+                                                    html.Li(
+                                                        [
+                                                            "Quietest: ",
+                                                            html.Strong(
+                                                                f"{quiet_hour}:00",
+                                                                className="text-success",
+                                                            ),
+                                                            " (ideal time!)",
+                                                        ]
+                                                    ),
+                                                ],
+                                                className="mb-2",
+                                            ),
+                                            html.Small(
+                                                "Weekend peaks shift later",
+                                                className="text-muted",
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                ]
+                            )
+                        ]
+                    ),
+                ],
+                className="mb-4",
+            )
+
+        # Gym rankings
+        rankings = get_gym_rankings(state, days)
+        rankings_table = html.Div()
+
+        if not rankings.empty:
+            rankings_table = dbc.Card(
+                [
+                    dbc.CardHeader(html.H5("Gym Rankings")),
+                    dbc.CardBody(
+                        [
+                            dbc.Table.from_dataframe(
+                                rankings[
+                                    [
+                                        "name",
+                                        "size_sqm",
+                                        "avg_count",
+                                        "peak_count",
+                                        "avg_capacity_pct",
+                                    ]
+                                ].round(1),
+                                striped=True,
+                                bordered=True,
+                                hover=True,
+                                responsive=True,
+                                class_name="mt-2",
+                            )
+                        ]
+                    ),
+                ]
+            )
+
+        return summary_cards, trends_fig, heatmap_fig, peak_analysis, rankings_table
+
+    except Exception as e:
+        error_msg = html.Div(
+            [
+                dbc.Alert(f"Error loading analytics: {str(e)}", color="danger"),
+            ]
+        )
+        empty_fig = go.Figure()
+        return error_msg, empty_fig, empty_fig, html.Div(), html.Div()
+
+
+# ─── App layout ────────────────────────────────────────────────────────────
+app.layout = layout
 
 # ─── bare-bones index (adds subtle bg gradient) ───────────────────────────
 if __name__ == "__main__":

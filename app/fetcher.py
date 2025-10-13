@@ -10,6 +10,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from models import Base, Gym, LiveCount
 from db import engine, Session
 
+
 def _extract_gym_area_and_address(soup):
     AREA_RE = re.compile(r"(\d[\d,]*)")
     AREA_LABELS = ("sq/m", "sqm", "m²")
@@ -187,6 +188,11 @@ def start_scheduler():
 
     scheduler = BackgroundScheduler(daemon=True)
     # Run immediately when started and then every minute
-    scheduler.add_job(scrape_once, "interval", minutes=5, next_run_time=dt.datetime.now())
+    scheduler.add_job(
+        scrape_once,
+        "interval",
+        minutes=5,
+        next_run_time=dt.datetime.now(dt.timezone.utc),
+    )
     scheduler.start()
     logging.info("Scheduler started - will scrape every 5 minutes")
