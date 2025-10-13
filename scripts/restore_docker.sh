@@ -105,6 +105,16 @@ restore_backup() {
     # Restore the database
     if gunzip -c "$backup_file" | docker exec -i "$DB_CONTAINER" psql -U postgres -d postgres; then
         log "Database restore completed successfully"
+        
+        # Fix collation version mismatch after restore
+        log "Refreshing collation versions..."
+        if docker exec "$DB_CONTAINER" psql -U postgres -d postgres -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" >/dev/null 2>&1; then
+            log "Postgres database collation version refreshed"
+        fi
+        
+        if docker exec "$DB_CONTAINER" psql -U postgres -d revo -c "ALTER DATABASE revo REFRESH COLLATION VERSION;" >/dev/null 2>&1; then
+            log "Revo database collation version refreshed"
+        fi
     else
         error "Database restore failed"
         # Restart application container even if restore failed

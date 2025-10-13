@@ -217,6 +217,36 @@ def restore_backup(backup_file, db_url, verbose=False):
                 )
         
         logger.info("Database restore completed successfully")
+        
+        # Fix collation version mismatch after restore
+        logger.info("Refreshing collation versions...")
+        try:
+            # Refresh collation for postgres database
+            refresh_cmd = [
+                "psql",
+                f"--host={db_config['host']}",
+                f"--port={db_config['port']}",
+                f"--username={db_config['user']}",
+                "--dbname=postgres",
+                "--quiet",
+                "--command=ALTER DATABASE postgres REFRESH COLLATION VERSION;"
+            ]
+            
+            result = subprocess.run(refresh_cmd, env=env, capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info("Postgres database collation version refreshed")
+            
+            # Refresh collation for revo database
+            refresh_cmd[5] = "--dbname=revo"
+            refresh_cmd[7] = "ALTER DATABASE revo REFRESH COLLATION VERSION;"
+            
+            result = subprocess.run(refresh_cmd, env=env, capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info("Revo database collation version refreshed")
+                
+        except Exception as e:
+            logger.warning(f"Could not refresh collation versions: {e}")
+        
         return True
         
     except Exception as e:
