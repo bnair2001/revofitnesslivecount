@@ -111,7 +111,13 @@ layout = dbc.Container(
         html.Div(id="tab-content"),
         # Global stores and intervals
         dcc.Store(id="tz-offset", storage_type="memory"),
+        dcc.Store(id="loading-state", storage_type="memory", data=False),
         dcc.Interval(id="auto-int", interval=60_000, n_intervals=0),
+        # Toast notifications
+        html.Div(
+            id="toast-container",
+            style={"position": "fixed", "top": "20px", "right": "20px", "zIndex": 9999},
+        ),
     ],
     fluid=True,
 )
@@ -122,6 +128,58 @@ app.clientside_callback(
     Output("tz-offset", "data"),
     Input("auto-int", "n_intervals"),
 )
+
+# ─── Show spinner when refresh button is clicked ───────────────────────────
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        if (n_clicks > 0) {
+            return {'display': 'inline-block'};
+        }
+        return {'display': 'none'};
+    }
+    """,
+    Output("refresh-spinner", "style"),
+    Input("refresh-btn", "n_clicks"),
+)
+
+# ─── Hide spinner when data is loaded ───────────────────────────────────────
+app.clientside_callback(
+    """
+    function(children) {
+        return {'marginLeft': '10px', 'display': 'none'};
+    }
+    """,
+    Output("refresh-spinner", "style", allow_duplicate=True),
+    Input("crowd-cards", "children"),
+    prevent_initial_call=True,
+)
+
+
+# ─── Show loading toast when refresh starts ───────────────────────────────
+@app.callback(
+    Output("toast-container", "children"),
+    Input("refresh-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_loading_toast(n_clicks):
+    if n_clicks:
+        return dbc.Toast(
+            [
+                html.Div(
+                    [dbc.Spinner(size="sm", className="me-2"), "Updating gym data..."],
+                    className="d-flex align-items-center",
+                )
+            ],
+            id="loading-toast",
+            header="Data Update",
+            is_open=True,
+            dismissible=True,
+            duration=3000,  # Auto-dismiss after 3 seconds
+            icon="info",
+            style={"minWidth": "300px"},
+        )
+    return []
 
 
 # ─── Tab content callback ──────────────────────────────────────────────────
@@ -165,8 +223,21 @@ def create_live_tab():
                     className="pt-3",
                 ),
                 dbc.Col(
-                    dbc.Button(
-                        "Refresh now", id="refresh-btn", n_clicks=0, color="primary"
+                    html.Div(
+                        [
+                            dbc.Button(
+                                "Refresh now",
+                                id="refresh-btn",
+                                n_clicks=0,
+                                color="primary",
+                            ),
+                            html.Div(
+                                dbc.Spinner(size="sm"),
+                                id="refresh-spinner",
+                                style={"marginLeft": "10px", "display": "none"},
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center"},
                     ),
                     xs="auto",
                     className="pt-3",
@@ -174,7 +245,13 @@ def create_live_tab():
             ],
             className="g-3 justify-content-center mb-4",
         ),
-        html.Div(id="crowd-cards"),
+        # Loading indicator
+        dcc.Loading(
+            id="loading-live",
+            type="default",
+            children=html.Div(id="crowd-cards"),
+            style={"minHeight": "200px"},
+        ),
     ]
 
 
@@ -219,19 +296,43 @@ def create_analytics_tab():
             className="mb-4",
         ),
         # Summary stats cards
-        html.Div(id="summary-cards"),
+        dcc.Loading(
+            id="loading-summary", type="default", children=html.Div(id="summary-cards")
+        ),
         # Charts
         dbc.Row(
             [
-                dbc.Col([dcc.Graph(id="trends-chart")], md=6),
-                dbc.Col([dcc.Graph(id="heatmap-chart")], md=6),
+                dbc.Col(
+                    [
+                        dcc.Loading(
+                            id="loading-trends",
+                            type="default",
+                            children=dcc.Graph(id="trends-chart"),
+                        )
+                    ],
+                    md=6,
+                ),
+                dbc.Col(
+                    [
+                        dcc.Loading(
+                            id="loading-heatmap",
+                            type="default",
+                            children=dcc.Graph(id="heatmap-chart"),
+                        )
+                    ],
+                    md=6,
+                ),
             ],
             className="mb-4",
         ),
         # Peak hours analysis
-        html.Div(id="peak-analysis"),
+        dcc.Loading(
+            id="loading-peak", type="default", children=html.Div(id="peak-analysis")
+        ),
         # Gym rankings table
-        html.Div(id="gym-rankings"),
+        dcc.Loading(
+            id="loading-rankings", type="default", children=html.Div(id="gym-rankings")
+        ),
     ]
 
 
