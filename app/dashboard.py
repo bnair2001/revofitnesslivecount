@@ -38,6 +38,21 @@ def _state_options():
     return [{"label": s, "value": s} for s in sorted(res)]
 
 
+def _gym_options(state: str):
+    """Return gym dropdown options for a specific state"""
+    if not state:
+        return [{"label": "All Gyms", "value": "all"}]
+    
+    ses = Session()
+    try:
+        gyms = ses.query(Gym.name).filter_by(state=state).order_by(Gym.name).all()
+        options = [{"label": "All Gyms", "value": "all"}]
+        options.extend([{"label": gym.name, "value": gym.name} for gym in gyms])
+        return options
+    finally:
+        ses.close()
+
+
 def _get_latest_counts(state: str) -> pd.DataFrame:
     """
     Returns latest LiveCount per gym using PostgreSQL DISTINCT ON
@@ -152,8 +167,17 @@ app.clientside_callback(
     """,
     Output("refresh-spinner", "style", allow_duplicate=True),
     Input("crowd-cards", "children"),
-    prevent_initial_call=True,
+    prevent_initial_call=True
 )
+
+
+# ─── Update gym dropdown when state changes ───────────────────────────────
+@app.callback(
+    Output("analytics-gym-dropdown", "options"),
+    Input("analytics-state-dropdown", "value"),
+)
+def update_gym_options(state):
+    return _gym_options(state)
 
 
 # ─── Show loading toast when refresh starts ───────────────────────────────
@@ -267,6 +291,20 @@ def create_analytics_tab():
                             id="analytics-state-dropdown",
                             options=_state_options(),
                             value="SA",
+                            clearable=False,
+                        ),
+                    ],
+                    xs=12,
+                    sm=6,
+                    md=3,
+                ),
+                dbc.Col(
+                    [
+                        dbc.Label("Gym", className="fw-semibold"),
+                        dcc.Dropdown(
+                            id="analytics-gym-dropdown",
+                            options=[{"label": "All Gyms", "value": "all"}],
+                            value="all",
                             clearable=False,
                         ),
                     ],
@@ -558,13 +596,15 @@ def update_cards(state, _auto, _btn, toggle_vals, tz_offset):
     ],
     [
         Input("analytics-state-dropdown", "value"),
+        Input("analytics-gym-dropdown", "value"),
         Input("analytics-period-dropdown", "value"),
     ],
 )
-def update_analytics(state, days):
+def update_analytics(state, gym, days):
     try:
         # Summary stats
-        stats = get_summary_stats(state, days)
+        gym_filter = None if gym == 'all' else gym
+        stats = get_summary_stats(state, days, gym_filter)
 
         summary_cards = []
         if stats:
@@ -580,7 +620,10 @@ def update_analytics(state, days):
                                                 stats["total_gyms"],
                                                 className="card-title text-primary",
                                             ),
-                                            html.P("Total Gyms", className="card-text"),
+                                            html.P(
+                                "Gym Count" if stats.get("is_single_gym", False) else "Total Gyms",
+                                className="card-text"
+                            ),
                                         ]
                                     )
                                 ]
@@ -636,11 +679,12 @@ def update_analytics(state, days):
                                     dbc.CardBody(
                                         [
                                             html.H4(
-                                                stats["busiest_gym"],
+                                                stats.get("avg_capacity_pct", stats.get("busiest_gym", "N/A")),
                                                 className="card-title text-info",
                                             ),
                                             html.P(
-                                                "Busiest Gym", className="card-text"
+                                                "Avg Capacity %" if stats.get("is_single_gym", False) else "Busiest Gym",
+                                                className="card-text"
                                             ),
                                         ]
                                     )
@@ -655,12 +699,12 @@ def update_analytics(state, days):
 
         # Charts
         trends_fig = create_trends_chart(
-            state, min(days, 7)
+            state, min(days, 7), gym_filter
         )  # Limit trends to 7 days for performance
-        heatmap_fig = create_heatmap_chart(state, days)
+        heatmap_fig = create_heatmap_chart(state, gym_filter, days)
 
         # Peak hours analysis
-        peak_data = get_peak_hours_analysis(state, days)
+        peak_data = get_peak_hours_analysis(state, days, gym_filter)
         peak_analysis = html.Div()
 
         if peak_data:
@@ -741,7 +785,7 @@ def update_analytics(state, days):
             )
 
         # Gym rankings
-        rankings = get_gym_rankings(state, days)
+        rankings = get_gym_rankings(state, days, gym_filter)
         rankings_table = html.Div()
 
         if not rankings.empty:

@@ -13,18 +13,23 @@ from models import LiveCount, Gym
 from db import Session
 
 
-def get_gym_trends(state: str, days: int = 30) -> pd.DataFrame:
+def get_gym_trends(state: str, days: int = 30, gym_name: str = None) -> pd.DataFrame:
     """Get trend data for gyms in a state over specified days"""
     ses = Session()
     try:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+
+        # Build conditions
+        conditions = [Gym.state == state, LiveCount.ts >= cutoff]
+        if gym_name and gym_name != "all":
+            conditions.append(Gym.name == gym_name)
 
         stmt = (
             select(
                 Gym.name, Gym.size_sqm, LiveCount.ts.label("timestamp"), LiveCount.count
             )
             .join(LiveCount.gym)
-            .where(and_(Gym.state == state, LiveCount.ts >= cutoff))
+            .where(and_(*conditions))
             .order_by(LiveCount.ts)
         )
 
@@ -51,9 +56,9 @@ def get_gym_trends(state: str, days: int = 30) -> pd.DataFrame:
         ses.close()
 
 
-def get_peak_hours_analysis(state: str, days: int = 30) -> dict:
-    """Analyze peak hours across all gyms"""
-    df = get_gym_trends(state, days)
+def get_peak_hours_analysis(state: str, days: int = 30, gym_name: str = None) -> dict:
+    """Analyze peak hours across gyms"""
+    df = get_gym_trends(state, days, gym_name)
 
     if df.empty:
         return {}
@@ -76,9 +81,9 @@ def get_peak_hours_analysis(state: str, days: int = 30) -> dict:
     }
 
 
-def create_trends_chart(state: str, days: int = 7):
+def create_trends_chart(state: str, days: int = 7, gym_name: str = None):
     """Create a trend chart for recent days"""
-    df = get_gym_trends(state, days)
+    df = get_gym_trends(state, days, gym_name)
 
     if df.empty:
         return go.Figure().add_annotation(
@@ -99,12 +104,19 @@ def create_trends_chart(state: str, days: int = 7):
         .reset_index()
     )
 
+    # Set title based on gym selection
+    title = "7-Day Crowd Trends"
+    if gym_name and gym_name != 'all':
+        title += f" - {gym_name}"
+    else:
+        title += f" - {state}"
+    
     fig = px.line(
         df_hourly,
         x="timestamp",
         y="count",
         color="name",
-        title=f"7-Day Crowd Trends - {state}",
+        title=title,
         labels={"count": "People Count", "timestamp": "Time"},
     )
 
@@ -115,9 +127,9 @@ def create_trends_chart(state: str, days: int = 7):
     return fig
 
 
-def create_heatmap_chart(state: str, days: int = 30):
-    """Create hour vs weekday heatmap"""
-    df = get_gym_trends(state, days)
+def create_heatmap_chart(state: str, gym_name: str = None, days: int = 30):
+    """Create heatmap of peak hours analysis"""
+    df = get_gym_trends(state, days, gym_name)
 
     if df.empty:
         return go.Figure()
@@ -147,8 +159,15 @@ def create_heatmap_chart(state: str, days: int = 30):
         )
     )
 
+    # Set title based on gym selection
+    title = "Average Crowd by Hour and Day"
+    if gym_name and gym_name != 'all':
+        title += f" - {gym_name}"
+    else:
+        title += f" - {state}"
+    
     fig.update_layout(
-        title=f"Average Crowd by Hour and Day - {state}",
+        title=title,
         xaxis_title="Hour of Day",
         yaxis_title="Day of Week",
         height=400,
@@ -157,9 +176,9 @@ def create_heatmap_chart(state: str, days: int = 30):
     return fig
 
 
-def get_gym_rankings(state: str, days: int = 30) -> pd.DataFrame:
+def get_gym_rankings(state: str, days: int = 30, gym_name: str = None) -> pd.DataFrame:
     """Get gym rankings by various metrics"""
-    df = get_gym_trends(state, days)
+    df = get_gym_trends(state, days, gym_name)
 
     if df.empty:
         return pd.DataFrame()
@@ -181,9 +200,9 @@ def get_gym_rankings(state: str, days: int = 30) -> pd.DataFrame:
     return rankings.sort_values("avg_count", ascending=False)
 
 
-def get_summary_stats(state: str, days: int = 30) -> dict:
+def get_summary_stats(state: str, days: int = 30, gym_name: str = None) -> dict:
     """Get summary statistics for the state"""
-    df = get_gym_trends(state, days)
+    df = get_gym_trends(state, days, gym_name)
 
     if df.empty:
         return {}
@@ -196,16 +215,34 @@ def get_summary_stats(state: str, days: int = 30) -> dict:
     avg_total = df.groupby("timestamp")["count"].sum().mean()
     peak_total = df.groupby("timestamp")["count"].sum().max()
 
-    # Busiest gym
-    gym_avg = df.groupby("name")["count"].mean()
-    busiest_gym = gym_avg.idxmax()
-
-    return {
-        "total_gyms": total_gyms,
-        "total_records": total_records,
-        "date_range": date_range,
-        "avg_total_count": round(avg_total, 1),
-        "peak_total_count": int(peak_total),
-        "busiest_gym": busiest_gym,
-        "busiest_gym_avg": round(gym_avg.max(), 1),
-    }
+    # Context-specific stats
+    if gym_name and gym_name != 'all':
+        # Single gym stats
+        gym_data = df[df["name"] == gym_name]
+        avg_capacity = gym_data["capacity_pct"].mean() if not gym_data.empty else 0
+        
+        return {
+            "total_gyms": 1,
+            "total_records": total_records,
+            "date_range": date_range,
+            "avg_total_count": round(avg_total, 1),
+            "peak_total_count": int(peak_total),
+            "gym_name": gym_name,
+            "avg_capacity_pct": round(avg_capacity, 1),
+            "is_single_gym": True,
+        }
+    else:
+        # Multi-gym stats
+        gym_avg = df.groupby("name")["count"].mean()
+        busiest_gym = gym_avg.idxmax()
+        
+        return {
+            "total_gyms": total_gyms,
+            "total_records": total_records,
+            "date_range": date_range,
+            "avg_total_count": round(avg_total, 1),
+            "peak_total_count": int(peak_total),
+            "busiest_gym": busiest_gym,
+            "busiest_gym_avg": round(gym_avg.max(), 1),
+            "is_single_gym": False,
+        }

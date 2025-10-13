@@ -5,6 +5,7 @@ Scrape the Revo Fitness live-member page and output state-segmented counts.
 import re
 import csv
 import sys
+from typing import Dict, List, Tuple
 import requests
 from bs4 import BeautifulSoup
 
@@ -17,7 +18,7 @@ def fetch_soup(url: str) -> BeautifulSoup:
     return BeautifulSoup(resp.text, "html.parser")
 
 
-def extract_state_map(select_tag) -> dict[str, list[str]]:
+def extract_state_map(select_tag) -> Dict[str, List[str]]:
     """
     Walk the <option> elements in #gymSelect.
     Whenever we see an option with the disabled attribute, we treat its text
@@ -37,7 +38,7 @@ def extract_state_map(select_tag) -> dict[str, list[str]]:
     return state_map
 
 
-def extract_counts(soup) -> dict[str, int]:
+def extract_counts(soup) -> Dict[str, int]:
     counts = {}
     for tag in soup.select("span[data-live-count]"):
         gym = tag["data-live-count"].strip()
@@ -48,7 +49,7 @@ def extract_counts(soup) -> dict[str, int]:
     return counts
 
 
-def extract_gym_area_and_address(soup) -> tuple[dict[str, str], dict[str, int]]:
+def extract_gym_area_and_address(soup) -> Tuple[Dict[str, str], Dict[str, int]]:
     """
     <div data-counter-card="Pitt St" class="hidden flex flex-col col-span-2 gap-6 h-fit w-full">
                                         <div class="flex flex-col gap-2">
@@ -132,9 +133,9 @@ def csv_out(out):
             )
 
 
-def get_gym_count_by_state_dict() -> dict[str, dict[str, int]]:
+def get_gym_count_by_state_dict() -> Dict[str, Dict[str, int]]:
     state_map, counts, address, area = fetch_gym_data()
-    gym_count_by_state: dict[str, dict[str, int]] = {state: {} for state in state_map}
+    gym_count_by_state: Dict[str, Dict[str, int]] = {state: {} for state in state_map}
     for state, gyms in state_map.items():
         for gym in gyms:
             gym_count_by_state[state][gym] = counts.get(gym, 0)
