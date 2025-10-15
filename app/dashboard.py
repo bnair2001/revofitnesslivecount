@@ -1,8 +1,10 @@
 import datetime as dt
+import os
 
 import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output
+from flask import send_from_directory
 import pandas as pd
 import plotly.graph_objects as go
 from sqlalchemy import func, and_, desc
@@ -27,6 +29,305 @@ start_scheduler()  # spin up background job
 # Initialize single-page app with tabs
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Revo Fitness Live Crowd"
+
+# PWA Configuration
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        
+        <!-- PWA Meta Tags -->
+        <meta name="application-name" content="Revo Fitness Live Count">
+        <meta name="description" content="Real-time gym crowd tracking and analytics for Revo Fitness locations">
+        <meta name="theme-color" content="#007bff">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="default">
+        <meta name="apple-mobile-web-app-title" content="Revo Live">
+        <meta name="mobile-web-app-capable" content="yes">
+        
+        <!-- PWA Manifest -->
+        <link rel="manifest" href="/static/manifest.json">
+        
+        <!-- Apple Touch Icons -->
+        <link rel="apple-touch-icon" sizes="152x152" href="/static/icon-152x152.png">
+        <link rel="apple-touch-icon" sizes="180x180" href="/static/icon-192x192.png">
+        
+        <!-- Favicon -->
+        <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32x32.png">
+                <!-- PWA Manifest -->
+        <link rel="manifest" href="/static/manifest.json">
+        
+        <!-- Apple Touch Icons -->
+        <link rel="apple-touch-icon" sizes="152x152" href="/static/icon-152x152.png">
+        <link rel="apple-touch-icon" sizes="180x180" href="/static/icon-192x192.png">
+        
+        <!-- Favicon -->
+        <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32x32.png">
+        <link rel="icon" type="image/png" sizes="16x16" href="/static/icon-192x192.png">
+        
+        <!-- PWA Styles -->
+        <link rel="stylesheet" href="/static/pwa.css"
+        
+        <!-- PWA Install Prompt Styles -->
+        <style>
+        .pwa-install-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, #007bff, #0056b3);
+            color: white;
+            padding: 12px 16px;
+            z-index: 9999;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            transform: translateY(-100%);
+            transition: transform 0.3s ease;
+        }
+        .pwa-install-banner.show {
+            transform: translateY(0);
+        }
+        .pwa-install-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .pwa-install-text {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .pwa-install-icon {
+            font-size: 1.5rem;
+        }
+        .pwa-install-buttons {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .pwa-btn {
+            background: white;
+            color: #007bff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .pwa-btn:hover {
+            background: #f8f9fa;
+            transform: translateY(-1px);
+        }
+        .pwa-btn.secondary {
+            background: transparent;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .pwa-btn.secondary:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        @media (max-width: 768px) {
+            .pwa-install-content {
+                flex-direction: column;
+                gap: 12px;
+                text-align: center;
+            }
+            .pwa-install-text {
+                justify-content: center;
+            }
+        }
+        </style>
+    </head>
+    <body>
+        <!-- PWA Install Banner -->
+        <div id="pwa-install-banner" class="pwa-install-banner">
+            <div class="pwa-install-content">
+                <div class="pwa-install-text">
+                    <span class="pwa-install-icon">📱</span>
+                    <div>
+                        <div style="font-weight: 600;">Install Revo Fitness App</div>
+                        <div style="font-size: 0.85rem; opacity: 0.9;">Get the full app experience with offline access</div>
+                    </div>
+                </div>
+                <div class="pwa-install-buttons">
+                    <button id="pwa-install-btn" class="pwa-btn">Install</button>
+                    <button id="pwa-dismiss-btn" class="pwa-btn secondary">Later</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- PWA Status Indicator -->
+        <div id="pwa-status" class="pwa-status">
+            <span class="pwa-pulse"></span>
+            <span id="pwa-status-text">Connecting...</span>
+        </div>
+        
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+            
+            <!-- PWA Service Worker Registration -->
+            <script>
+            // PWA Installation and Service Worker
+            let deferredPrompt;
+            let installBanner = document.getElementById('pwa-install-banner');
+            let installBtn = document.getElementById('pwa-install-btn');
+            let dismissBtn = document.getElementById('pwa-dismiss-btn');
+            
+            // Check if app is already installed
+            function isAppInstalled() {
+                return window.matchMedia('(display-mode: standalone)').matches || 
+                       window.navigator.standalone === true ||
+                       localStorage.getItem('pwa-installed') === 'true';
+            }
+            
+            // Show install banner
+            function showInstallBanner() {
+                if (!isAppInstalled() && localStorage.getItem('pwa-dismissed') !== 'true') {
+                    setTimeout(() => {
+                        installBanner.classList.add('show');
+                    }, 2000); // Show after 2 seconds
+                }
+            }
+            
+            // Hide install banner
+            function hideInstallBanner() {
+                installBanner.classList.remove('show');
+            }
+            
+            // Handle install button click
+            installBtn.addEventListener('click', async () => {
+                hideInstallBanner();
+                
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    const { outcome } = await deferredPrompt.userChoice;
+                    console.log('PWA install outcome:', outcome);
+                    
+                    if (outcome === 'accepted') {
+                        localStorage.setItem('pwa-installed', 'true');
+                    }
+                    deferredPrompt = null;
+                } else {
+                    // Fallback for iOS or browsers without beforeinstallprompt
+                    alert('To install this app:\\n\\n1. Tap the Share button\\n2. Select "Add to Home Screen"\\n3. Tap "Add"');
+                }
+            });
+            
+            // Handle dismiss button
+            dismissBtn.addEventListener('click', () => {
+                hideInstallBanner();
+                localStorage.setItem('pwa-dismissed', 'true');
+                // Re-show after 24 hours
+                setTimeout(() => {
+                    localStorage.removeItem('pwa-dismissed');
+                }, 24 * 60 * 60 * 1000);
+            });
+            
+            // Listen for beforeinstallprompt event
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+                showInstallBanner();
+            });
+            
+            // Listen for app installed event
+            window.addEventListener('appinstalled', () => {
+                console.log('PWA was installed');
+                localStorage.setItem('pwa-installed', 'true');
+                hideInstallBanner();
+            });
+            
+            // Register service worker
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                    navigator.serviceWorker.register('/static/sw.js')
+                        .then((registration) => {
+                            console.log('SW registered: ', registration);
+                            
+                            // Check for updates
+                            registration.addEventListener('updatefound', () => {
+                                const newWorker = registration.installing;
+                                newWorker.addEventListener('statechange', () => {
+                                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                        // Show update notification
+                                        if (confirm('New version available! Reload to update?')) {
+                                            window.location.reload();
+                                        }
+                                    }
+                                });
+                            });
+                        })
+                        .catch((registrationError) => {
+                            console.log('SW registration failed: ', registrationError);
+                        });
+                });
+            }
+            
+            // Show install banner on page load if not installed
+            document.addEventListener('DOMContentLoaded', () => {
+                if (!isAppInstalled()) {
+                    showInstallBanner();
+                }
+            });
+            
+            // PWA Status Management
+            let pwaStatus = document.getElementById('pwa-status');
+            let pwaStatusText = document.getElementById('pwa-status-text');
+            
+            function updatePWAStatus(status, text) {
+                pwaStatus.className = `pwa-status ${status} show`;
+                pwaStatusText.textContent = text;
+                
+                // Auto-hide after 3 seconds for non-critical statuses
+                if (status === 'online' || status === 'updating') {
+                    setTimeout(() => {
+                        pwaStatus.classList.remove('show');
+                    }, 3000);
+                }
+            }
+            
+            // Handle offline/online events
+            window.addEventListener('online', () => {
+                console.log('Back online');
+                updatePWAStatus('online', 'Back online');
+            });
+            
+            window.addEventListener('offline', () => {
+                console.log('Gone offline');
+                updatePWAStatus('offline', 'Offline mode');
+            });
+            
+            // Service worker update handling
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    updatePWAStatus('updating', 'App updated');
+                    // Optionally refresh the page after update
+                    setTimeout(() => window.location.reload(), 2000);
+                });
+            }
+            
+            // Initial status check
+            if (navigator.onLine) {
+                setTimeout(() => updatePWAStatus('online', 'Connected'), 1000);
+            } else {
+                updatePWAStatus('offline', 'Offline mode');
+            }
+            </script>
+        </footer>
+    </body>
+</html>
+'''
 
 
 # ────────────────── helpers ──────────────────
@@ -978,4 +1279,23 @@ if __name__ == "__main__":
 </body>
 </html>
 """
+
+# ─── Static file serving for PWA assets ────────────────────────────────────
+
+
+@app.server.route('/static/<path:filename>')
+def serve_static(filename):
+    """Serve static files for PWA assets"""
+    static_dir = os.path.join(os.path.dirname(__file__), 'static')
+    return send_from_directory(static_dir, filename)
+
+
+@app.server.route('/favicon.ico')
+def serve_favicon():
+    """Serve favicon"""
+    static_dir = os.path.join(os.path.dirname(__file__), 'static')
+    return send_from_directory(static_dir, 'favicon.ico')
+
+
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8050, debug=False)

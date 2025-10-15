@@ -1,0 +1,80 @@
+/* PWA Status Indicator Styles */
+.pwa-status {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: all 0.3s ease;
+}
+
+.pwa-status.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.pwa-status.online {
+    background: rgba(40, 167, 69, 0.9);
+}
+
+.pwa-status.offline {
+    background: rgba(220, 53, 69, 0.9);
+}
+
+.pwa-status.updating {
+    background: rgba(255, 193, 7, 0.9);
+    color: #000;
+}
+
+.pwa-pulse {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* PWA Loading states */
+.pwa-updating {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    text-align: center;
+    z-index: 10000;
+}
+
+/* Mobile PWA adjustments */
+@media (display-mode: standalone) {
+    .pwa-install-banner {
+        display: none !important;
+    }
+}
+
+/* iOS PWA status bar */
+@supports (-webkit-touch-callout: none) {
+    @media (display-mode: standalone) {
+        body {
+            padding-top: env(safe-area-inset-top);
+        }
+    }
+}
